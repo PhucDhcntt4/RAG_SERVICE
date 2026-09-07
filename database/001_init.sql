@@ -43,5 +43,4 @@ CREATE TABLE IF NOT EXISTS rag_service.chunks (
 
 CREATE INDEX IF NOT EXISTS rag_documents_category_idx
 ON rag_service.documents(category, is_active);
--- Start with exact cosine search to preserve recall with category filters.
--- Add/tune a vector index after measuring corpus size and retrieval recall.
+

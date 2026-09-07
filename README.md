@@ -6,6 +6,8 @@ Service trả **ngữ cảnh và nguồn**, không tự tư vấn/chốt đơn. 
 
 ## Cài đặt trên Windows
 
+Muốn bật/tắt bằng Docker Desktop hoặc Docker Compose, xem [hướng dẫn Docker](DOCKER.md). Gói Docker dùng database PostgreSQL hiện có và giữ tài liệu trong `knowlegde` trên máy Windows.
+
 Yêu cầu Python 3.11+, PostgreSQL đã có extension pgvector, database/tài khoản dành cho RAG, Gemini API key. Chưa tự tạo database, chưa nhập tài liệu cũ và chưa chuyển bot sang service này.
 
 Trong CMD:

@@ -1,0 +1,11 @@
+# Allowlist: never send credentials, uploaded documents, Git, or .venv to the builder.
+**
+!Dockerfile
+!requirements.txt
+!app/
+!app/**
+!database/
+!database/**
+**/__pycache__/
+**/*.pyc
+**/*.pyo

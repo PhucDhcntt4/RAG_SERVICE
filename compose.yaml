@@ -1,0 +1,32 @@
+name: donghai-rag-service
+
+services:
+  rag:
+    build: .
+    image: donghai-rag-service:local
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:${RAG_HTTP_PORT:-8000}:8000"
+    environment:
+      RAG_DATABASE_HOST_OVERRIDE: host.docker.internal
+    volumes:
+      - type: bind
+        source: ./.env
+        target: /app/.env
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./knowlegde
+        target: /app/knowlegde
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
