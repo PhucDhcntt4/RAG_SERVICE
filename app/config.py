@@ -26,6 +26,11 @@ class Settings(BaseModel):
     rag_max_upload_bytes: int = Field(default=10485760, ge=1024, le=20971520)
     rag_max_concurrent_requests: int = Field(default=2, ge=1, le=16)
     rag_embedding_timeout_seconds: int = Field(default=30, ge=1, le=120)
+    rag_chat_model: str = Field(default="gemini-2.5-flash", min_length=1, max_length=100, pattern=r"^[a-zA-Z0-9._-]+$")
+    rag_chat_timeout_seconds: int = Field(default=60, ge=5, le=120)
+    rag_chat_max_statements: int = Field(default=40, ge=1, le=100)
+    rag_chat_max_answer_chars: int = Field(default=12000, ge=1000, le=20000)
+    rag_local_admin_enabled: bool = True
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
     @model_validator(mode="after")

@@ -38,23 +38,99 @@ Mở `http://127.0.0.1:8001/` hoặc `/admin` để dùng giao diện quản lý
 
 ## Giao diện quản lý tài liệu
 
-1. Nhập giá trị `ADMIN_API_KEY` vào ô kết nối (không kèm chữ `Bearer`). Key chỉ nằm trong bộ nhớ trang, không ghi vào cookie, localStorage hay sessionStorage. Tải lại trang cần nhập lại key.
+1. Mở trang trực tiếp bằng `http://127.0.0.1:8000/admin` hoặc `http://localhost:8000/admin`: giao diện tự kết nối, không cần nhập key khi `RAG_LOCAL_ADMIN_ENABLED=true` (mặc định). Nếu truy cập từ máy khác hoặc đã tắt chế độ này, dùng `ADMIN_API_KEY` ở ô kết nối; key chỉ giữ trong bộ nhớ trang.
 2. Bấm **Thêm tài liệu**, chọn/kéo thả file TXT, MD hoặc PDF có lớp văn bản, điền tên và chọn nhóm. Có thể nhập mã nhóm khác. File TXT/MD cần UTF-8; giới hạn upload lấy từ cấu hình server (mặc định 10 MB).
 3. Bấm **Thêm tài liệu** và đợi xử lý embedding. Tài liệu thành công sẽ xuất hiện trên trang đầu của danh sách. Mỗi lần mở biểu mẫu tạo mã nguồn riêng, không ghi đè tài liệu cùng tên.
 4. Bấm **tên tài liệu** để mở hộp xem toàn bộ văn bản đã lưu (PDF hiển thị phần văn bản trích xuất). Bấm **Tải về** để lấy file đã lưu. Bấm **Xóa** trên tài liệu, kiểm tra tên trong hộp xác nhận rồi bấm **Xóa tài liệu**. Tài liệu, embedding và file local bị xóa vĩnh viễn.
-5. Dùng **Trước/Sau** để chuyển trang (20 tài liệu mỗi trang), **Làm mới** để cập nhật danh sách, hoặc **Ngắt kết nối** khi xong.
+5. Dùng **Trước/Sau** để chuyển trang (20 tài liệu mỗi trang), **Làm mới** để cập nhật danh sách. Nút **Ngắt kết nối** chỉ hiện khi đăng nhập bằng key.
 
-Nếu mất kết nối trong lúc thêm/xóa, kiểm tra lại danh sách trước khi gửi lại. Giao diện và tài nguyên tĩnh công khai, nhưng API danh sách/upload/xóa vẫn bắt buộc admin key. Giao diện dùng API cùng origin, không cần Node.js hoặc bước build. Khi cập nhật code, khởi động lại Uvicorn để nhận route mới.
+Nếu mất kết nối trong lúc thêm/xóa, kiểm tra lại danh sách trước khi gửi lại. Giao diện dùng API cùng origin, không cần Node.js hoặc bước build. Khi cập nhật code, khởi động lại Uvicorn để nhận route mới.
+
+Truy cập tự động dùng `/admin-api/v1/...`, kiểm tra địa chỉ loopback của client,
+Host localhost, Origin cùng trang và header `X-RAG-Local-UI`. Không cho truy cập
+tự động qua reverse proxy/tunnel hoặc từ máy khác. Không nhúng API key vào HTML/JS.
+Các API `/api/v1/...` dành cho bot/client vẫn yêu cầu Bearer key: `SEARCH_API_KEY`
+để tìm kiếm; `ADMIN_API_KEY` để quản lý tài liệu hoặc gọi API chat quản trị.
+Đổi `RAG_LOCAL_ADMIN_ENABLED=false` trong `.env` rồi chạy lại để yêu cầu key cả trên máy local.
 
 Swagger vẫn có tại `http://127.0.0.1:8001/docs` để thử API tìm kiếm và các thao tác khác. Bấm **Authorize**, nhập admin key (không cần tiền tố Bearer trong ô này).
 
 ## Các API v1
+
+### Thử hỏi đáp RAG trên giao diện
+
+Mở `/admin` trên localhost (tự kết nối) và bấm **Thử RAG**. Gemini tổng hợp câu trả lời
+từ kết quả tìm kiếm, kèm nhãn `[S1]`, `[S2]` đối chiếu với nguồn phía dưới.
+Mở **Xem nội dung truy xuất** để xem câu hỏi tìm kiếm và các đoạn được đưa vào model.
+Bạn có thể hỏi tiếp; lịch sử tối đa 6 lượt hoàn tất/24.000 ký tự được giữ trong bộ nhớ
+trang và gửi cùng câu hỏi. **Xóa hội thoại**, ngắt kết nối hoặc tải lại trang sẽ xóa lịch sử.
+
+Luồng chat: làm rõ câu hỏi tiếp nối bằng lịch sử → tìm kiếm vector hiện có → Gemini
+trả các ý cùng số nguồn → server kiểm tra số nguồn và gắn nhãn. Lịch sử không được
+dùng làm bằng chứng thay tài liệu. Khi không tìm được dữ liệu hoặc model nhận thấy
+chứng cứ không đủ, API trả `insufficient_context`. Kiểm tra mã nguồn trích dẫn không
+đảm bảo mọi diễn giải của model đều đúng; vẫn cần đối chiếu nội dung truy xuất.
+
+Chat dùng `GEMINI_API_KEY` hiện có. Có thể cấu hình trong `.env`:
+
+```env
+RAG_CHAT_MODEL=gemini-2.5-flash
+RAG_CHAT_TIMEOUT_SECONDS=60
+RAG_CHAT_MAX_STATEMENTS=40
+RAG_CHAT_MAX_ANSWER_CHARS=12000
+```
+
+Prompt được quản lý riêng trong `app/prompts`:
+
+- `answer.txt`: vai trò, giọng văn, quy tắc dùng tài liệu và trích dẫn khi trả lời.
+- `rewrite_question.txt`: hướng dẫn làm rõ câu hỏi tiếp nối trước khi tìm kiếm.
+- `no_answer.txt`: câu trả lời cố định khi thiếu dữ liệu; đây là văn bản hiển thị, không gửi làm prompt LLM.
+
+Mở file bằng trình soạn thảo, sửa nội dung và lưu UTF-8. Lượt hỏi tiếp theo đọc lại
+file, không cần khởi động lại server khi chạy trực tiếp bằng Python. Bấm **Xóa hội thoại**
+trước khi so sánh các phiên bản prompt để lịch sử cũ không ảnh hưởng kết quả.
+File rỗng, bị xóa hoặc sai mã hóa sẽ báo lỗi rõ trên giao diện.
+
+Có thể thay đổi cách xưng hô, độ chi tiết và quy tắc nghiệp vụ. Các trường
+`sufficient`, `statements`, `text`, `citations` trong `answer.txt` phải khớp schema
+ở `app/chat.py`; số nguồn phải thuộc kết quả truy xuất. Payload gồm câu hỏi,
+lịch sử và tài liệu vẫn do code truyền riêng, không cần chèn biến vào file prompt.
+Prompt nằm trong thư mục `app`, nên Dockerfile hiện có cũng đóng gói các file này.
+
+Câu trả lời mặc định tối đa 40 ý, 12.000 ký tự sau khi gắn nhãn. Đổi hai giá trị
+`RAG_CHAT_MAX_STATEMENTS` (1–100) và `RAG_CHAT_MAX_ANSWER_CHARS` (1.000–20.000) trong
+`.env`, rồi khởi động lại server để áp dụng. Đây là giới hạn trên, không phải độ dài
+bắt buộc; ngân sách sinh vẫn là 8.192 token nên tăng ký tự không bảo đảm model sinh
+hết giới hạn đó. Lịch sử chấp nhận câu trả lời tối đa 20.000 ký tự mỗi tin, tổng
+24.000 ký tự; giao diện bỏ các lượt cũ khi hết chỗ và giữ nguyên lượt vừa hoàn tất.
+
+Trong `answer.txt`, `{{max_statements}}`, `{{max_answer_chars}}` và
+`{{answer_text_budget}}` được thay bằng cấu hình khi gọi model. Biến cuối dành 90%
+giới hạn ký tự cho văn bản, phần còn lại dành cho trích dẫn. Giữ nguyên tên biến
+khi sửa prompt. Prompt yêu cầu danh sách đầy đủ trong phạm vi context, đánh số và
+đối chiếu tổng số với các mục liệt kê. Giới hạn này không mở rộng dữ liệu tìm kiếm:
+`RAG_TOP_K` và `RAG_MAX_CONTEXT_CHARS` vẫn quyết định tài liệu LLM được thấy.
+Nếu context thiếu dữ liệu, model phải nói rõ phạm vi thay vì khẳng định danh sách đầy đủ.
+
+Model nhận câu hỏi, lịch sử gần nhất và các đoạn tài liệu truy xuất qua Gemini API.
+Lượt đầu gọi model một lần để trả lời; lượt tiếp nối thêm một lần làm rõ câu hỏi.
+Các lần gọi này dùng quota của API key. Giới hạn timeout áp dụng cho từng lần gọi.
+Định dạng đầu ra dùng [Gemini structured outputs](https://ai.google.dev/gemini-api/docs/generate-content/structured-output).
+
+`POST /api/v1/chat` yêu cầu admin key, nhận
+`{"query":"Còn điều kiện đổi hàng?","history":[{"role":"user","content":"Đổi hàng trong bao lâu?"}]}`.
+Có thể truyền thêm `categories`, `top_k` như search. Response có `answer`, `status`,
+`sources` (kèm `citation`), `retrieval_query`, `context`, `model`, `elapsed_ms`.
+`/api/v1/knowledge/search` vẫn giữ hợp đồng cũ cho bot đang dùng riêng.
+
+Kiểm tra tự động: `python -m unittest tests.test_chat tests.test_service`.
 
 | Method | URL | Quyền / chức năng |
 |---|---|---|
 | GET | `/health/live` | Công khai, kiểm tra process sống |
 | GET | `/api/v1/health/ready` | Search/admin key; kiểm tra kết nối và bảng DB, không gọi Gemini |
 | POST | `/api/v1/knowledge/search` | Search/admin key; tìm ngữ cảnh |
+| POST | `/api/v1/chat` | Admin; hỏi đáp Gemini với ngữ cảnh RAG và lịch sử |
 | PUT | `/api/v1/documents` | Admin; thêm hoặc cập nhật bằng JSON |
 | POST | `/api/v1/documents/upload` | Admin; tải TXT/MD/PDF text |
 | GET | `/api/v1/documents?limit=50&offset=0` | Admin; danh sách phân trang |
@@ -145,10 +221,36 @@ Nhiều bot có thể dùng chung một kho qua search key. **Bản này chưa c
 - PostgreSQL cosine search chính xác, lọc tài liệu đang bật, category và cấu hình embedding tương thích. Chưa có hybrid search, reranker hoặc index ANN. Cần đo chất lượng/tốc độ trước khi mở rộng kho lớn. Adapter DB dùng [pgvector cho Psycopg](https://github.com/pgvector/pgvector-python).
 - Đổi nội dung và thêm/tắt tài liệu áp dụng sau transaction thành công, không phải restart. Đổi `.env` cần restart process. Thay model/dimension cần thay adapter/schema tương ứng và lập chỉ mục lại, không chỉ đổi tên trong env.
 - API v1 giữ request/response ổn định để bot không phụ thuộc code nội bộ. Thay đổi phá vỡ tương thích nên ra API v2.
-- Log có timestamp, method, route, status và thời gian mỗi request; không ghi text câu hỏi/tài liệu, token, DSN. Search có thêm `elapsed_ms`; mọi response có `X-Response-Time-Ms`.
+- Log INFO có timestamp, request_id, method, route, status và thời gian mỗi request. DEBUG bổ sung câu hỏi và metadata truy xuất như hướng dẫn bên dưới. Không ghi nội dung tài liệu, lịch sử, câu trả lời, API key, vector hay DSN. Search có thêm `elapsed_ms`; mọi response có `X-Response-Time-Ms` và `X-Request-ID`.
 - Semaphore giới hạn đồng thời theo process, không phải rate limit phân tán. Production cần TLS, rate/body/time limits tại reverse proxy, backup PostgreSQL, giám sát, key rotation và kiểm thử tải. Giới hạn body ở API không thay thế giới hạn tài nguyên parser PDF; chỉ admin tin cậy được upload.
 
 ## Kiểm thử
+
+### Theo dõi truy vấn và metadata trong terminal
+
+Đặt `LOG_LEVEL=DEBUG` trong `.env`, khởi động lại server. Cấu hình này điều khiển
+log ứng dụng RAG, độc lập với `uvicorn --log-level debug`. Đổi về `LOG_LEVEL=INFO`
+khi chỉ cần xem request HTTP và lỗi. DEBUG hiển thị nội dung câu hỏi và metadata nguồn.
+
+- `RAG CHAT INPUT`: câu hỏi người dùng, nhóm được gửi lên, số tin nhắn lịch sử và model.
+- `RAG CHAT QUERY`: câu hỏi gốc và câu hỏi đã làm rõ dùng để truy xuất.
+- `RAG SEARCH`: query, categories, category_scope, top_k, min_similarity, embedding_model, context_limit.
+- `RAG EMBEDDING` / `RAG RETRIEVAL`: thời gian embedding/tìm DB, số chunk và nhóm tìm được.
+- `RAG SOURCE`: source_key, title, category, heading, chunk_index, similarity, selected,
+  citation (với chat), số ký tự đưa vào context và cờ truncated. Nguồn bị bỏ do hết
+  dung lượng có selected=false, reason=context_limit. chunk_index bắt đầu từ 0.
+- `RAG CONTEXT`: số chunk thực sự gửi tiếp và kích thước context.
+- `RAG LLM START/DONE/FAILED`: bước rewrite hoặc answer, model, thời gian và mã lỗi nếu có.
+- `RAG CHAT RESULT`: trạng thái, độ dài trả lời, nhãn nguồn sử dụng và tổng thời gian.
+
+Mọi dòng của một HTTP request dùng chung `request_id`, cũng được trả qua header
+`X-Request-ID`. Dùng mã này để phân biệt các câu hỏi chạy đồng thời.
+`categories=[] category_scope="all"` nghĩa là không lọc nhóm; `categories=["store"]`
+nghĩa là client yêu cầu chỉ tìm nhóm store. `category` trong `RAG SOURCE` là nhóm
+thực của tài liệu. RAG không tự suy luận nhóm từ câu hỏi. Giao diện Thử RAG hiện
+gửi câu hỏi và lịch sử, nên mặc định tìm tất cả nhóm. Khi bot gọi riêng API search,
+chỉ có log truy xuất; các bước lập kế hoạch Facebook và trả lời tại bot vẫn nằm
+trong log của dự án bot.
 
 ```bat
 python -m unittest discover -s tests -v

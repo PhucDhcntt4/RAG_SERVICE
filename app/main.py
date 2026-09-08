@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from time import perf_counter
 from typing import Annotated
 from urllib.parse import quote
+from uuid import uuid4
 
 import psycopg
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
@@ -14,8 +15,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 from app.config import ROOT, Settings
+from app.debug_log import request_id
+from app.chat import ChatError, GeminiChat
 from app.embeddings import EmbeddingError, GeminiEmbedder
-from app.models import ActiveRequest, DocumentRequest, SearchRequest, SearchResponse
+from app.models import ActiveRequest, ChatRequest, ChatResponse, DocumentRequest, SearchRequest, SearchResponse
+from app.local_admin import allow_local_admin
 from app.repository import Repository
 from app.service import InvalidDocument, KnowledgeService, ServiceBusy
 from app.storage import StorageError
@@ -39,12 +43,24 @@ class RequestGuard:
         self.app, self.owner = app, owner
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or not scope["path"].startswith("/api/"):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        local_ui = scope['path'].startswith('/admin-api/')
+        if not local_ui and not scope['path'].startswith('/api/'):
             return await self.app(scope, receive, send)
         settings = self.owner.state.settings
         headers = dict(scope["headers"])
-        auth = headers.get(b"authorization", b"").decode("latin-1").split()
-        role = token_role(auth[1], settings) if len(auth) == 2 and auth[0].lower() == "bearer" else None
+        if local_ui:
+            if not allow_local_admin(scope, settings):
+                return await JSONResponse({'detail': 'Truy cập tự động chỉ dùng trực tiếp trên localhost khi được bật.'},
+                                          status_code=403)(scope, receive, send)
+            path = '/api/' + scope['path'][len('/admin-api/'):]
+            scope.update(path=path, raw_path=path.encode('utf-8'),
+                         state={**scope.get('state', {}), 'local_admin': True})
+            role = 'admin'
+        else:
+            auth = headers.get(b"authorization", b"").decode("latin-1").split()
+            role = token_role(auth[1], settings) if len(auth) == 2 and auth[0].lower() == "bearer" else None
         if role is None:
             return await JSONResponse({"detail": "API key không hợp lệ"}, status_code=401,
                                       headers={"WWW-Authenticate": "Bearer"})(scope, receive, send)
@@ -75,12 +91,13 @@ class RequestGuard:
         await self.app(scope, replay, send)
 
 
-def create_app(settings=None, service=None):
+def create_app(settings=None, service=None, chat=None):
     @asynccontextmanager
     async def lifespan(application):
         config = settings or Settings.load()
         logging.basicConfig(level=config.log_level,
                             format="%(asctime)s %(levelname)s %(name)s %(message)s")
+        logger.setLevel(config.log_level)
         # Third-party debug logs can include HTTP data. Keep our logs separate.
         for name in ("httpx", "httpx2", "httpcore", "httpcore2", "google_genai"):
             logging.getLogger(name).setLevel(logging.WARNING)
@@ -90,7 +107,11 @@ def create_app(settings=None, service=None):
         pdf_logger.propagate = False
         application.state.settings = config
         owned_embedder = None
+        owned_chat = None
         try:
+            if chat is None:
+                owned_chat = GeminiChat(config)
+            application.state.chat = chat if chat is not None else owned_chat
             if service is None:
                 owned_embedder = GeminiEmbedder(config)
                 application.state.service = KnowledgeService(config, Repository(config), owned_embedder)
@@ -99,6 +120,8 @@ def create_app(settings=None, service=None):
             logger.info("RAG SERVICE started model=%s dimension=768", config.rag_embedding_model)
             yield
         finally:
+            if owned_chat is not None:
+                owned_chat.close()
             if owned_embedder is not None:
                 owned_embedder.close()
 
@@ -118,18 +141,23 @@ def create_app(settings=None, service=None):
     @application.middleware("http")
     async def log_request(request, call_next):
         started = perf_counter()
+        trace = uuid4().hex
+        token = request_id.set(trace)
         try:
             response = await call_next(request)
         except Exception as exc:
-            logger.error("RAG REQUEST failed error_type=%s", type(exc).__name__)
+            logger.error("RAG REQUEST failed request_id=%s error_type=%s", trace, type(exc).__name__)
             response = JSONResponse({"detail": "Lỗi nội bộ RAG service"}, status_code=500)
+        finally:
+            request_id.reset(token)
         elapsed = (perf_counter() - started) * 1000
         response.headers["X-Response-Time-Ms"] = f"{elapsed:.2f}"
         response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Request-ID"] = trace
         # Route template, not user-supplied query strings or paths.
         route = getattr(request.scope.get("route"), "path", "unmatched")
-        logger.info("RAG REQUEST method=%s route=%s status=%s time_ms=%.2f",
-                    request.method, route, response.status_code, elapsed)
+        logger.info("RAG REQUEST request_id=%s method=%s route=%s status=%s time_ms=%.2f",
+                    trace, request.method, route, response.status_code, elapsed)
         return response
 
     @application.exception_handler(RequestValidationError)
@@ -153,7 +181,13 @@ def create_app(settings=None, service=None):
         return JSONResponse({"detail": "RAG tạm thời không khả dụng; vui lòng thử lại"},
                             status_code=503, headers={"Retry-After": "5"})
 
+    @application.exception_handler(ChatError)
+    async def chat_error(request, exc):
+        return JSONResponse({'detail': str(exc)}, status_code=503)
+
     def authorize(request: Request, credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]):
+        if getattr(request.state, 'local_admin', False):
+            return 'admin'
         role = token_role(credentials.credentials, request.app.state.settings) if credentials else None
         if role is None:
             raise HTTPException(401, "API key không hợp lệ", headers={"WWW-Authenticate": "Bearer"})
@@ -179,6 +213,11 @@ def create_app(settings=None, service=None):
                       dependencies=[Depends(authorize)], tags=["Search"])
     def search(payload: SearchRequest, svc=Depends(current_service)):
         return svc.search(payload)
+
+    @application.post('/api/v1/chat', response_model=ChatResponse,
+                      dependencies=[Depends(admin)], tags=['Chat'])
+    def chat_answer(payload: ChatRequest, request: Request, svc=Depends(current_service)):
+        return request.app.state.chat.answer(payload, svc)
 
     @application.put("/api/v1/documents", dependencies=[Depends(admin)], tags=["Documents"])
     def upsert(payload: DocumentRequest, svc=Depends(current_service)):

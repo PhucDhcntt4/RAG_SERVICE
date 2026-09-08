@@ -7,6 +7,7 @@ from time import perf_counter
 from pypdf import PdfReader
 
 from app.chunking import chunk_text
+from app.debug_log import debug_event
 from app.models import DocumentRequest
 from app.storage import LocalFileStore
 
@@ -103,31 +104,62 @@ class KnowledgeService:
             raise InvalidDocument("Không tìm thấy văn bản; PDF scan cần OCR trước khi tải lên")
         return text
 
-    def search(self, request):
+    def search(self, request, *, numbered_sources=False):
         started = perf_counter()
+        top_k = request.top_k or self.settings.rag_top_k
+        debug_event('RAG SEARCH', query=request.query, categories=request.categories or [],
+                    category_scope='filtered' if request.categories else 'all', top_k=top_k,
+                    min_similarity=self.settings.rag_min_similarity,
+                    embedding_model=self.embedder.model, context_limit=self.settings.rag_max_context_chars)
         with self.capacity():
-            vector = self.embedder.embed([request.query], query=True)[0]
-            rows = self.repository.search(
-                vector, self.embedder, request.categories, self.settings.rag_min_similarity,
-                request.top_k or self.settings.rag_top_k,
-            )
+            stage = 'embedding'
+            stage_started = perf_counter()
+            try:
+                vector = self.embedder.embed([request.query], query=True)[0]
+                debug_event('RAG EMBEDDING', dimension=len(vector),
+                            time_ms=round((perf_counter() - stage_started) * 1000, 2))
+                stage = 'database_search'
+                stage_started = perf_counter()
+                rows = self.repository.search(
+                    vector, self.embedder, request.categories, self.settings.rag_min_similarity, top_k)
+                debug_event('RAG RETRIEVAL', matched_chunks=len(rows),
+                            matched_categories=sorted({row['category'] for row in rows}),
+                            time_ms=round((perf_counter() - stage_started) * 1000, 2))
+            except Exception as exc:
+                debug_event('RAG SEARCH FAILED', stage=stage, error_type=type(exc).__name__,
+                            time_ms=round((perf_counter() - stage_started) * 1000, 2))
+                raise
         parts, sources, used = [], [], 0
-        for row in rows:
+        context_full = False
+        for rank, row in enumerate(rows, 1):
             label = row["title"] + (f" > {row['heading']}" if row.get("heading") else "")
             prefix = f"[Nguồn: {label}]\n"
+            if numbered_sources:
+                prefix = f"[S{len(sources) + 1}] " + prefix
             room = self.settings.rag_max_context_chars - used - (2 if parts else 0)
-            if room <= len(prefix):
-                break
+            metadata = {key: row.get(key) for key in (
+                'source_key', 'title', 'category', 'heading', 'chunk_index', 'similarity')}
+            if context_full or room <= len(prefix):
+                context_full = True
+                debug_event('RAG SOURCE', rank=rank, selected=False, reason='context_limit', **metadata)
+                continue
             part = prefix + row["content"][:room - len(prefix)]
+            debug_event('RAG SOURCE', rank=rank, selected=True,
+                        citation=f'S{len(sources) + 1}' if numbered_sources else None,
+                        content_chars=len(row['content']), included_chars=len(part) - len(prefix),
+                        truncated=len(part) - len(prefix) < len(row['content']), **metadata)
             used += len(part) + (2 if parts else 0)
             parts.append(part)
             sources.append({key: row.get(key) for key in (
                 "source_key", "title", "category", "heading", "chunk_index", "similarity"
             )})
+        elapsed_ms = round((perf_counter() - started) * 1000, 2)
+        debug_event('RAG CONTEXT', status='knowledge_found' if parts else 'knowledge_not_found',
+                    selected_chunks=len(sources), context_chars=used, time_ms=elapsed_ms)
         return {
             "success": bool(parts),
             "status": "knowledge_found" if parts else "knowledge_not_found",
             "content": "\n\n".join(parts),
             "sources": sources,
-            "elapsed_ms": round((perf_counter() - started) * 1000, 2),
+            "elapsed_ms": elapsed_ms,
         }

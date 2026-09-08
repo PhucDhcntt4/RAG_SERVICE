@@ -1,63 +1,308 @@
 <!doctype html>
 <html lang="vi">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Kho tài liệu · Đông Hải</title>
-  <link rel="stylesheet" href="/assets/admin.css">
-  <script src="/assets/admin.js" defer></script>
-</head>
-<body>
-  <aside class="sidebar">
-    <a class="brand" href="/" aria-label="Đông Hải, trang chủ"><span class="brand-mark">ĐH</span><span>ĐÔNG HẢI<small>TRUNG TÂM TRI THỨC</small></span></a>
-    <div class="nav-label">KHÔNG GIAN LÀM VIỆC</div>
-    <a class="nav-item selected" href="/" aria-current="page"><span aria-hidden="true">▤</span> Kho tài liệu</a>
-    <a class="nav-item" href="/docs" target="_blank" rel="noopener"><span aria-hidden="true">↗</span> Tài liệu API</a>
-    <div class="sidebar-note"><span class="note-symbol" aria-hidden="true">✦</span><strong>Thông tin tốt hơn.<br>Câu trả lời tốt hơn.</strong><p>Tập trung tài liệu để trợ lý tìm đúng thông tin cho khách hàng.</p></div>
-    <div class="sidebar-footer"><span class="mini-mark">ĐH</span> RAG Service <span class="version">v1.0</span></div>
-  </aside>
-  <main>
-    <header class="topbar"><span>Không gian quản trị <span class="slash">/</span> <strong>Kho tài liệu</strong></span><span class="connection" id="connection">Chưa kết nối</span></header>
-    <div class="workspace">
-      <div class="page-heading"><div><div class="eyebrow">THƯ VIỆN KIẾN THỨC</div><h1>Kho tài liệu</h1><p>Thêm và quản lý nguồn thông tin cho trợ lý Đông Hải.</p></div><button class="primary" id="add-document" disabled><span aria-hidden="true">＋</span> Thêm tài liệu</button></div>
-      <section class="login-card" id="login-panel" aria-labelledby="login-title">
-        <div class="login-icon" aria-hidden="true">⌘</div><div class="login-content"><h2 id="login-title">Kết nối kho tài liệu</h2><p>Nhập admin key để xem và quản lý tài liệu. Key chỉ được giữ trong bộ nhớ của trang này.</p>
-        <form id="login-form"><label class="sr-only" for="admin-key">Admin key</label><div class="key-field"><input id="admin-key" type="password" placeholder="Nhập ADMIN_API_KEY" required autocomplete="off" spellcheck="false"><button type="button" id="toggle-key" class="key-toggle" aria-label="Hiện admin key" aria-controls="admin-key">Hiện</button></div><button class="primary" id="connect-button">Kết nối</button></form><p class="field-error" id="login-error" role="alert"></p></div>
-      </section>
-      <div id="notice" class="notice" role="status" hidden></div>
-      <section class="library" aria-labelledby="library-title">
-        <div class="library-header"><div><h2 id="library-title">Tất cả tài liệu <span id="page-count" class="count">—</span></h2><p>Nguồn kiến thức được sử dụng khi tìm kiếm.</p></div><div class="toolbar"><button class="secondary" id="refresh" disabled>↻ <span>Làm mới</span></button><button class="text-button" id="disconnect" hidden>Ngắt kết nối</button></div></div>
-        <div id="loading" class="state" role="status" hidden><span class="spinner"></span><h3>Đang tải tài liệu…</h3></div>
-        <div id="empty" class="state"><div class="empty-icon" aria-hidden="true">▤</div><h3 id="empty-title">Kho kiến thức của bạn bắt đầu từ đây</h3><p id="empty-description">Kết nối để xem danh sách và thêm tài liệu cho trợ lý.</p><button class="secondary" id="empty-add" hidden>＋ Thêm tài liệu đầu tiên</button></div>
-        <div class="table-wrap" id="table-wrap" hidden><table><thead><tr><th>TÀI LIỆU</th><th>NHÓM</th><th>TRẠNG THÁI</th><th>CẬP NHẬT</th><th><span class="sr-only">Thao tác</span></th></tr></thead><tbody id="documents"></tbody></table></div>
-        <footer class="pagination"><span id="page-info">Chưa tải danh sách</span><div><button class="secondary small" id="previous" disabled>← Trước</button><button class="secondary small" id="next" disabled>Sau →</button></div></footer>
-      </section>
-      <p class="bottom-note">TXT, Markdown và PDF có lớp văn bản <span>·</span> Tài liệu được xử lý để phục vụ tìm kiếm</p>
-    </div>
-  </main>
-  <dialog id="upload-dialog" aria-labelledby="upload-title">
-    <div class="dialog-heading"><div><div class="eyebrow">BỔ SUNG KIẾN THỨC</div><h2 id="upload-title">Thêm tài liệu</h2></div><button type="button" class="icon-button" id="close-upload" aria-label="Đóng">×</button></div>
-    <form id="upload-form">
-      <label class="dropzone" id="dropzone" for="upload-file"><span class="upload-icon" aria-hidden="true">↑</span><strong id="file-label">Chọn file hoặc kéo thả vào đây</strong><span id="file-description">TXT, MD hoặc PDF có lớp văn bản</span><input id="upload-file" type="file" accept=".txt,.md,.pdf" required></label>
-      <label class="field" for="document-title">Tên tài liệu <input id="document-title" name="title" placeholder="Ví dụ: Hệ thống cửa hàng Đông Hải" maxlength="500" required></label>
-      <label class="field" for="document-category">Nhóm tài liệu<select id="document-category" name="category"><option value="store">Cửa hàng</option><option value="size_guide">Hướng dẫn chọn size</option><option value="warranty">Bảo hành</option><option value="returns">Đổi trả</option><option value="shipping">Giao hàng</option><option value="promotion">Khuyến mãi</option><option value="customer_care">Chăm sóc khách hàng</option><option value="custom">Nhóm khác…</option></select></label>
-      <label class="field" id="custom-category-field" for="custom-category" hidden>Mã nhóm<input id="custom-category" maxlength="100" placeholder="Ví dụ: product_info"></label>
-      <p class="form-hint">Mỗi lần thêm sẽ tạo một tài liệu mới. Chỉ đóng cửa sổ sau khi có kết quả xử lý.</p>
-      <p id="upload-error" class="field-error" role="alert"></p>
-      <div class="dialog-footer"><button type="button" class="secondary" id="cancel-upload">Hủy</button><button class="primary" id="submit-upload">Thêm tài liệu</button></div>
-    </form>
-  </dialog>
-  <dialog id="preview-dialog" aria-labelledby="preview-title">
-    <div class="dialog-heading"><div class="preview-heading"><div class="eyebrow">NỘI DUNG TÀI LIỆU</div><h2 id="preview-title"></h2><p id="preview-meta" class="preview-meta"></p></div><button type="button" class="icon-button" id="close-preview" aria-label="Đóng nội dung tài liệu">×</button></div>
-    <p class="preview-hint">Văn bản đã lưu để tìm kiếm. Với PDF, đây là nội dung trích xuất từ file.</p>
-    <div id="preview-loading" class="preview-loading" role="status"><span class="spinner" aria-hidden="true"></span><p>Đang tải nội dung…</p></div>
-    <p id="preview-error" class="field-error" role="alert"></p>
-    <pre id="preview-content" tabindex="0" aria-label="Nội dung văn bản" hidden></pre>
-    <div class="dialog-footer"><button type="button" class="secondary" id="done-preview">Đóng</button></div>
-  </dialog>
-  <dialog id="delete-dialog" aria-labelledby="delete-title">
-    <div class="delete-symbol" aria-hidden="true">!</div><h2 id="delete-title">Xóa tài liệu này?</h2><p class="delete-copy">Tài liệu <strong id="delete-name"></strong>, file lưu trên máy chủ và dữ liệu tìm kiếm liên quan sẽ bị xóa vĩnh viễn. Thao tác này không thể hoàn tác.</p>
-    <p id="delete-error" class="field-error" role="alert"></p><div class="dialog-footer"><button class="secondary" id="cancel-delete">Giữ tài liệu</button><button class="danger" id="confirm-delete">Xóa tài liệu</button></div>
-  </dialog>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kho tài liệu · Đông Hải</title>
+    <link rel="stylesheet" href="/assets/admin.css" />
+    <script src="/assets/admin.js" defer></script>
+  </head>
+  <body>
+    <aside class="sidebar">
+      <a class="brand" href="/" aria-label="Đông Hải, trang chủ"
+        ><span class="brand-mark">ĐH</span
+        ><span>ĐÔNG HẢI<small>TRUNG TÂM TRI THỨC</small></span></a
+      >
+      <div class="nav-label">KHÔNG GIAN LÀM VIỆC</div>
+      <a class="nav-item selected" href="/" aria-current="page"
+        ><span aria-hidden="true">▤</span> Kho tài liệu</a
+      >
+      <div class="sidebar-note">
+        <span class="note-symbol" aria-hidden="true">✦</span
+        ><strong>Thông tin tốt hơn.<br />Câu trả lời tốt hơn.</strong>
+        <p>Tập trung tài liệu để trợ lý tìm đúng thông tin cho khách hàng.</p>
+      </div>
+      <div class="sidebar-footer">
+        <span class="mini-mark">ĐH</span> RAG Service
+        <span class="version">v1.0</span>
+      </div>
+    </aside>
+    <main>
+      <header class="topbar">
+        <span
+          >Không gian quản trị <span class="slash">/</span>
+          <strong>Kho tài liệu</strong></span
+        ><span class="connection" id="connection">Chưa kết nối</span>
+      </header>
+      <div class="workspace">
+        <div class="page-heading">
+          <div>
+            <div class="eyebrow">THƯ VIỆN KIẾN THỨC</div>
+            <h1>Kho tài liệu</h1>
+            <p>Thêm và quản lý nguồn thông tin cho trợ lý Đông Hải.</p>
+          </div>
+          <div class="heading-actions">
+            <button class="secondary" id="test-rag" disabled>
+              <span aria-hidden="true">✦</span> Thử RAG
+            </button>
+            <button class="primary" id="add-document" disabled>
+              <span aria-hidden="true">＋</span> Thêm tài liệu
+            </button>
+          </div>
+        </div>
+        <section
+          class="login-card"
+          id="login-panel"
+          hidden
+          aria-labelledby="login-title"
+        >
+          <div class="login-icon" aria-hidden="true">⌘</div>
+          <div class="login-content">
+            <h2 id="login-title">Kết nối kho tài liệu</h2>
+            <p>
+              Nhập admin key để xem và quản lý tài liệu. Key chỉ được giữ trong
+              bộ nhớ của trang này.
+            </p>
+            <form id="login-form">
+              <label class="sr-only" for="admin-key">Admin key</label>
+              <div class="key-field">
+                <input
+                  id="admin-key"
+                  type="password"
+                  placeholder="Nhập ADMIN_API_KEY"
+                  required
+                  autocomplete="off"
+                  spellcheck="false"
+                /><button
+                  type="button"
+                  id="toggle-key"
+                  class="key-toggle"
+                  aria-label="Hiện admin key"
+                  aria-controls="admin-key"
+                >
+                  Hiện
+                </button>
+              </div>
+              <button class="primary" id="connect-button">Kết nối</button>
+            </form>
+            <p class="field-error" id="login-error" role="alert"></p>
+          </div>
+        </section>
+        <div id="notice" class="notice" role="status" hidden></div>
+        <section class="library" aria-labelledby="library-title">
+          <div class="library-header">
+            <div>
+              <h2 id="library-title">
+                Tất cả tài liệu <span id="page-count" class="count">—</span>
+              </h2>
+              <p>Nguồn kiến thức được sử dụng khi tìm kiếm.</p>
+            </div>
+            <div class="toolbar">
+              <button class="secondary" id="refresh" disabled>
+                ↻ <span>Làm mới</span></button
+              ><button class="text-button" id="disconnect" hidden>
+                Ngắt kết nối
+              </button>
+            </div>
+          </div>
+          <div id="loading" class="state" role="status" hidden>
+            <span class="spinner"></span>
+            <h3>Đang tải tài liệu…</h3>
+          </div>
+          <div id="empty" class="state">
+            <div class="empty-icon" aria-hidden="true">▤</div>
+            <h3 id="empty-title">Kho kiến thức của bạn bắt đầu từ đây</h3>
+            <p id="empty-description">
+              Kết nối để xem danh sách và thêm tài liệu cho trợ lý.
+            </p>
+            <button class="secondary" id="empty-add" hidden>
+              ＋ Thêm tài liệu đầu tiên
+            </button>
+          </div>
+          <div class="table-wrap" id="table-wrap" hidden>
+            <table>
+              <thead>
+                <tr>
+                  <th>TÀI LIỆU</th>
+                  <th>NHÓM</th>
+                  <th>TRẠNG THÁI</th>
+                  <th>CẬP NHẬT</th>
+                  <th><span class="sr-only">Thao tác</span></th>
+                </tr>
+              </thead>
+              <tbody id="documents"></tbody>
+            </table>
+          </div>
+          <footer class="pagination">
+            <span id="page-info">Chưa tải danh sách</span>
+            <div>
+              <button class="secondary small" id="previous" disabled>
+                ← Trước</button
+              ><button class="secondary small" id="next" disabled>Sau →</button>
+            </div>
+          </footer>
+        </section>
+        <p class="bottom-note">
+          TXT, Markdown và PDF có lớp văn bản <span>·</span> Tài liệu được xử lý
+          để phục vụ tìm kiếm
+        </p>
+      </div>
+    </main>
+    <dialog id="upload-dialog" aria-labelledby="upload-title">
+      <div class="dialog-heading">
+        <div>
+          <div class="eyebrow">BỔ SUNG KIẾN THỨC</div>
+          <h2 id="upload-title">Thêm tài liệu</h2>
+        </div>
+        <button
+          type="button"
+          class="icon-button"
+          id="close-upload"
+          aria-label="Đóng"
+        >
+          ×
+        </button>
+      </div>
+      <form id="upload-form">
+        <label class="dropzone" id="dropzone" for="upload-file"
+          ><span class="upload-icon" aria-hidden="true">↑</span
+          ><strong id="file-label">Chọn file hoặc kéo thả vào đây</strong
+          ><span id="file-description">TXT, MD hoặc PDF có lớp văn bản</span
+          ><input id="upload-file" type="file" accept=".txt,.md,.pdf" required
+        /></label>
+        <label class="field" for="document-title"
+          >Tên tài liệu
+          <input
+            id="document-title"
+            name="title"
+            placeholder="Ví dụ: Hệ thống cửa hàng Đông Hải"
+            maxlength="500"
+            required
+        /></label>
+        <label class="field" for="document-category"
+          >Nhóm tài liệu<select id="document-category" name="category">
+            <option value="store">Cửa hàng</option>
+            <option value="size_guide">Hướng dẫn chọn size</option>
+            <option value="warranty">Bảo hành</option>
+            <option value="returns">Đổi trả</option>
+            <option value="shipping">Giao hàng</option>
+            <option value="promotion">Khuyến mãi</option>
+            <option value="customer_care">Chăm sóc khách hàng</option>
+            <option value="custom">Nhóm khác…</option>
+          </select></label
+        >
+        <label
+          class="field"
+          id="custom-category-field"
+          for="custom-category"
+          hidden
+          >Mã nhóm<input
+            id="custom-category"
+            maxlength="100"
+            placeholder="Ví dụ: product_info"
+        /></label>
+        <p class="form-hint">
+          Mỗi lần thêm sẽ tạo một tài liệu mới. Chỉ đóng cửa sổ sau khi có kết
+          quả xử lý.
+        </p>
+        <p id="upload-error" class="field-error" role="alert"></p>
+        <div class="dialog-footer">
+          <button type="button" class="secondary" id="cancel-upload">Hủy</button
+          ><button class="primary" id="submit-upload">Thêm tài liệu</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="preview-dialog" aria-labelledby="preview-title">
+      <div class="dialog-heading">
+        <div class="preview-heading">
+          <div class="eyebrow">NỘI DUNG TÀI LIỆU</div>
+          <h2 id="preview-title"></h2>
+          <p id="preview-meta" class="preview-meta"></p>
+        </div>
+        <button
+          type="button"
+          class="icon-button"
+          id="close-preview"
+          aria-label="Đóng nội dung tài liệu"
+        >
+          ×
+        </button>
+      </div>
+      <p class="preview-hint">
+        Văn bản đã lưu để tìm kiếm. Với PDF, đây là nội dung trích xuất từ file.
+      </p>
+      <div id="preview-loading" class="preview-loading" role="status">
+        <span class="spinner" aria-hidden="true"></span>
+        <p>Đang tải nội dung…</p>
+      </div>
+      <p id="preview-error" class="field-error" role="alert"></p>
+      <pre
+        id="preview-content"
+        tabindex="0"
+        aria-label="Nội dung văn bản"
+        hidden
+      ></pre>
+      <div class="dialog-footer">
+        <button type="button" class="secondary" id="done-preview">Đóng</button>
+      </div>
+    </dialog>
+    <dialog id="chat-dialog" aria-labelledby="chat-title">
+      <div class="dialog-heading">
+        <div>
+          <div class="eyebrow">HỎI ĐÁP VỚI TÀI LIỆU</div>
+          <h2 id="chat-title">Thử RAG</h2>
+        </div>
+        <button
+          type="button"
+          class="icon-button"
+          id="close-chat"
+          aria-label="Đóng"
+        >
+          ×
+        </button>
+      </div>
+      <p class="preview-hint">
+        Trợ lý trả lời dựa trên kho tài liệu và trích dẫn nguồn để đối chiếu.
+        Hỗ trợ câu hỏi tiếp nối với tối đa 6 lượt gần nhất (tùy độ dài).
+        Lịch sử chỉ giữ trong bộ nhớ trang; bấm Xóa hội thoại để bắt đầu chủ đề mới.
+      </p>
+      <div id="chat-log" class="chat-log" role="log" aria-live="polite">
+        <div class="chat-empty" id="chat-empty">
+          Hỏi về tài liệu nội bộ. Bạn có thể hỏi tiếp trong cùng hội thoại.
+        </div>
+      </div>
+      <p id="chat-error" class="field-error" role="alert"></p>
+      <form id="chat-form" class="chat-form">
+        <label class="sr-only" for="chat-input">Câu hỏi</label>
+        <textarea
+          id="chat-input"
+          rows="1"
+          placeholder="Nhập câu hỏi để kiểm tra…"
+          maxlength="4000"
+          required
+        ></textarea>
+        <button class="primary" id="chat-send" type="submit">Gửi</button>
+      </form>
+      <div class="dialog-footer">
+        <button type="button" class="text-button" id="clear-chat">
+          Xóa hội thoại
+        </button>
+        <button type="button" class="secondary" id="done-chat">Đóng</button>
+      </div>
+    </dialog>
+    <dialog id="delete-dialog" aria-labelledby="delete-title">
+      <div class="delete-symbol" aria-hidden="true">!</div>
+      <h2 id="delete-title">Xóa tài liệu này?</h2>
+      <p class="delete-copy">
+        Tài liệu <strong id="delete-name"></strong>, file lưu trên máy chủ và dữ
+        liệu tìm kiếm liên quan sẽ bị xóa vĩnh viễn. Thao tác này không thể hoàn
+        tác.
+      </p>
+      <p id="delete-error" class="field-error" role="alert"></p>
+      <div class="dialog-footer">
+        <button class="secondary" id="cancel-delete">Giữ tài liệu</button
+        ><button class="danger" id="confirm-delete">Xóa tài liệu</button>
+      </div>
+    </dialog>
+  </body>
 </html>
