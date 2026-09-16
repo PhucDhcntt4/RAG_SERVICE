@@ -19,7 +19,8 @@
     hasNext = false,
     busy = false,
     deleting = null,
-    sourceKey = "";
+    sourceKey = "",
+    updating = false;
   let previewRequest = null,
     previewVersion = 0;
 
@@ -287,6 +288,11 @@
         );
         actions.append(download);
       }
+      const update = element("button", "download-button", "Cập nhật file");
+      update.type = "button";
+      update.setAttribute("aria-label", `Cập nhật file ${doc.title}`);
+      update.addEventListener("click", () => openUpload(doc));
+      actions.append(update);
       const remove = element("button", "delete-button", "Xóa");
       remove.type = "button";
       remove.setAttribute("aria-label", `Xóa ${doc.title}`);
@@ -405,18 +411,30 @@
       }),
     );
   }
-  function openUpload() {
+  function openUpload(doc = null) {
     $("upload-form").reset();
     $("upload-error").textContent = "";
     $("custom-category-field").hidden = true;
     $("custom-category").required = false;
     $("file-label").textContent = "Chọn file hoặc kéo thả vào đây";
     $("file-description").textContent = "TXT, MD hoặc PDF có lớp văn bản";
-    sourceKey = `upload/${crypto.randomUUID()}`;
+    updating = Boolean(doc);
+    sourceKey = doc ? doc.source_key : `upload/${crypto.randomUUID()}`;
+    $("upload-title").textContent = updating ? "Cập nhật tài liệu" : "Thêm tài liệu";
+    $("submit-upload").textContent = updating ? "Cập nhật tài liệu" : "Thêm tài liệu";
+    if (doc) {
+      $("document-title").value = doc.title;
+      const known = [...$("document-category").options].some(option => option.value !== "custom" && option.value === doc.category);
+      $("document-category").value = known ? doc.category : "custom";
+      $("custom-category-field").hidden = known;
+      $("custom-category").required = !known;
+      $("custom-category").value = known ? "" : doc.category;
+      $("file-description").textContent = "Chọn file để thay nội dung và tạo lại dữ liệu tìm kiếm của tài liệu này.";
+    }
     $("upload-dialog").showModal();
   }
-  $("add-document").addEventListener("click", openUpload);
-  $("empty-add").addEventListener("click", openUpload);
+  $("add-document").addEventListener("click", () => openUpload());
+  $("empty-add").addEventListener("click", () => openUpload());
   for (const id of ["close-upload", "cancel-upload"])
     $(id).addEventListener("click", () => {
       if (!busy) $("upload-dialog").close();
@@ -471,7 +489,7 @@
     $("close-upload").disabled = value;
     $("submit-upload").textContent = value
       ? "Đang xử lý tài liệu…"
-      : "Thêm tài liệu";
+      : updating ? "Cập nhật tài liệu" : "Thêm tài liệu";
   }
   $("upload-form").addEventListener("submit", (event) => {
     event.preventDefault();
@@ -506,7 +524,7 @@
         $("upload-dialog").close();
         notice(
           result.warning ||
-            `Đã thêm tài liệu “${title}” và lưu file trên máy chủ.`,
+            `Đã ${updating ? "cập nhật" : "thêm"} tài liệu “${title}” và lưu file trên máy chủ.`,
           Boolean(result.warning),
         );
         offset = 0;
@@ -514,7 +532,7 @@
           await load();
         } catch (error) {
           notice(
-            `Đã thêm tài liệu, nhưng chưa tải lại được danh sách. ${error.message}`,
+            `Đã lưu tài liệu, nhưng chưa tải lại được danh sách. ${error.message}`,
             true,
           );
         }

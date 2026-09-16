@@ -23,7 +23,11 @@ class Source(BaseModel):
     category: str
     heading: str | None = None
     chunk_index: int
-    similarity: float
+    similarity: float | None = None
+    bm25_score: float | None = None
+    rrf_score: float | None = None
+    bm25_rank: int | None = None
+    vector_rank: int | None = None
 
 
 class SearchResponse(BaseModel):

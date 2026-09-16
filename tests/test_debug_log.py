@@ -27,7 +27,11 @@ class DebugLogTests(unittest.TestCase):
         self.assertNotEqual(trace, second.headers['X-Request-ID'])
         events = [record.getMessage() for record in logs.records if trace in record.getMessage()]
         self.assertTrue(any('RAG SEARCH' in line and 'categories=["warranty"]' in line
-                            and 'top_k=2' in line for line in events))
+                            and 'top_k=2' in line and 'retrieval="hybrid"' in line
+                            for line in events))
+        self.assertTrue(any('RAG BM25' in line for line in events))
+        self.assertTrue(any('RAG VECTOR' in line for line in events))
+        self.assertTrue(any('RAG RRF' in line for line in events))
         self.assertTrue(any('RAG SOURCE' in line and 'category="warranty"' in line
                             and 'chunk_index=0' in line and 'similarity=0.8' in line for line in events))
         self.assertTrue(any('RAG CONTEXT' in line for line in events))
@@ -38,7 +42,9 @@ class DebugLogTests(unittest.TestCase):
 
     def test_context_logs_truncation_and_skipped_sources(self):
         service = make_service(config(rag_max_context_chars=500))
-        service.repository.search.return_value = [sample_row(content='x' * 1000), sample_row()]
+        service.repository.search.return_value = [
+            sample_row(content='x' * 1000), sample_row(chunk_id=2),
+        ]
         with self.assertLogs('rag_service', level='DEBUG') as logs:
             service.search(SearchRequest(query='Test'))
         text = '\n'.join(logs.output)

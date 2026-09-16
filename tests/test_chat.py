@@ -43,7 +43,26 @@ class ChatTests(unittest.TestCase):
         self.svc.embedder.embed.assert_called_with(['Thời hạn bảo hành giày?'], query=True)
         args = self.svc.repository.search.call_args.args
         self.assertEqual(args[2], ['warranty'])
-        self.assertEqual(args[4], 2)
+        self.assertEqual(args[4], 20)
+
+    def test_store_list_is_retrieved_and_written_by_llm(self):
+        self.svc.repository.search.return_value = [sample_row(
+            source_key='fixture/stores', category='store', heading='Địa chỉ',
+            content='Cửa hàng thử nghiệm: 101 Đường Mẫu.',
+        )]
+        self.chat.generate = Mock(return_value=AnswerDraft(sufficient=True, statements=[
+            {'text': 'Theo tài liệu, cửa hàng thử nghiệm ở 101 Đường Mẫu.', 'citations': [1]},
+        ]))
+        result = self.chat.answer(ChatRequest(query='hiện có cửa hàng ở đâu', categories=['store']), self.svc)
+        self.svc.embedder.embed.assert_called_once_with(['hiện có cửa hàng ở đâu'], query=True)
+        self.svc.repository.search.assert_called_once()
+        self.assertEqual(self.svc.repository.search.call_args.args[2], ['store'])
+        self.chat.generate.assert_called_once()
+        _, payload, schema = self.chat.generate.call_args.args
+        self.assertIs(schema, AnswerDraft)
+        self.assertIn('101 Đường Mẫu.', payload['context'])
+        self.assertEqual(result['answer'], 'Theo tài liệu, cửa hàng thử nghiệm ở 101 Đường Mẫu. [S1]')
+        self.assertEqual(result['sources'][0]['source_key'], 'fixture/stores')
 
     def test_full_twelve_item_list_is_not_limited_to_six_statements(self):
         statements = [{'text': 'Có 12 cửa hàng thử nghiệm.', 'citations': [1]}]
@@ -66,6 +85,17 @@ class ChatTests(unittest.TestCase):
             {'role': 'assistant', 'content': result['answer']}])
         self.assertEqual(followup.history[-1].content, result['answer'])
 
+    def test_complete_list_can_be_returned_as_one_long_statement(self):
+        text = "Danh sách quản lý: " + "Nguyễn Văn A – Quản lý bộ phận. " * 60
+        self.assertGreater(len(text), 1000)
+        self.chat.generate = Mock(return_value=AnswerDraft(
+            sufficient=True, statements=[{'text': text, 'citations': [1, 1]}],
+        ))
+        result = self.chat.answer(ChatRequest(query='Danh sách quản lý'), self.svc)
+        self.assertEqual(result['status'], 'answered')
+        self.assertIn(text, result['answer'])
+        self.assertTrue(result['answer'].endswith('[S1]'))
+
     def test_no_matches_does_not_generate_answer(self):
         self.svc.repository.search.return_value = []
         self.chat.generate = Mock()
@@ -82,6 +112,10 @@ class ChatTests(unittest.TestCase):
         self.assertIn('18000', prompt)
         self.assertIn('16200', prompt)
         self.assertNotIn('{{', prompt)
+        self.assertIn('mặc định tạo 2–5 statements', prompt)
+        self.assertIn('phải tạo ít nhất 3 statements', prompt)
+        self.assertIn('không chọn sufficient=false chỉ vì', prompt)
+        self.assertIn('Phân biệt rõ thời hạn hiệu lực, thời gian chờ và thời gian xử lý', prompt)
         statements = [{'text': f'{i}. ' + 'x' * 300, 'citations': [1]} for i in range(45)]
         chat.client.models.generate_content.return_value = SimpleNamespace(
             candidates=[SimpleNamespace(finish_reason=types.FinishReason.STOP)],

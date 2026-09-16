@@ -13,7 +13,6 @@ RUN useradd --system --uid 10001 --create-home rag \
     && chown -R rag:rag /app
 
 COPY --chown=rag:rag app ./app
-COPY --chown=rag:rag database ./database
 
 USER rag
 EXPOSE 8000

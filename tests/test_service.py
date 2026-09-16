@@ -10,20 +10,22 @@ from app.config import Settings
 from app.embeddings import EmbeddingError, GeminiEmbedder
 from app.main import create_app
 from app.models import DocumentRequest, SearchRequest
-from app.repository import Repository
 from app.service import InvalidDocument, KnowledgeService, ServiceBusy
 from app.storage import StoredFile
 
 
 def config(**overrides):
-    return Settings(database_url="postgresql://unused/test", search_api_key="s" * 32,
-                    admin_api_key="a" * 32, gemini_api_key="unused-test-key", **overrides)
+    return Settings(search_api_key="s" * 32, admin_api_key="a" * 32,
+                    gemini_api_key="unused-test-key", **overrides)
 
 
 def make_service(settings=None):
     settings = settings or config()
     repo = Mock()
     repo.search.return_value = []
+    repo.list_search_chunks.return_value = []
+    repo.expand_documents.return_value = []
+    repo.expand_sections.return_value = []
     repo.replace.return_value = {"id": 1, "chunk_count": 1}
     repo.list_documents.return_value = []
     repo.get_document.return_value = None
@@ -38,7 +40,8 @@ def make_service(settings=None):
 
 
 def sample_row(**overrides):
-    return {"source_key": "warranty.txt", "title": "Bảo hành", "category": "warranty",
+    return {"chunk_id": 1, "document_id": 1,
+            "source_key": "warranty.txt", "title": "Bảo hành", "category": "warranty",
             "heading": "Thời gian", "chunk_index": 0, "similarity": 0.8,
             "content": "Nội dung kiểm thử, không phải chính sách thật.", **overrides}
 
@@ -73,6 +76,12 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(result["id"], 1)
         svc.repository.replace.assert_called_once()
         self.assertIn("Xin chào", svc.embedder.embed.call_args.args[0][0])
+        self.assertEqual(result["chunking_method"], "heading_semantic_recursive")
+
+    def test_fixed_chunking_can_be_selected_for_rollback(self):
+        svc = make_service(config(rag_chunking_strategy="fixed"))
+        result = svc.ingest(DocumentRequest(source_key="a", title="A", text="Nội dung"))
+        self.assertEqual(result["chunking_method"], "fixed")
 
     def test_failed_embedding_never_writes(self):
         svc = make_service()
@@ -112,12 +121,15 @@ class ServiceTests(unittest.TestCase):
         svc.repository.search.return_value = [sample_row()]
         result = svc.search(SearchRequest(query="Hỏi bảo hành", categories=["warranty"], top_k=3))
         self.assertTrue(result["success"])
-        self.assertEqual(svc.repository.search.call_args.args[2:], (["warranty"], 0.45, 3))
+        self.assertEqual(svc.repository.search.call_args.args[2:], (["warranty"], 0.45, 20))
         self.assertEqual(result["sources"][0]["source_key"], "warranty.txt")
 
     def test_context_limit_includes_headers_and_separators(self):
         svc = make_service(config(rag_max_context_chars=500))
-        svc.repository.search.return_value = [sample_row(content="a" * 300), sample_row(content="b" * 400)]
+        svc.repository.search.return_value = [
+            sample_row(content="a" * 300),
+            sample_row(chunk_id=2, content="b" * 400),
+        ]
         result = svc.search(SearchRequest(query="abc"))
         self.assertEqual(len(result["content"]), 500)
         self.assertEqual(len(result["sources"]), 2)
@@ -295,32 +307,6 @@ class ConfigTests(unittest.TestCase):
 
     def test_repr_masks_secrets(self):
         self.assertNotIn("unused-test-key", repr(config()))
-
-
-class RepositoryTests(unittest.TestCase):
-    def test_search_sql_has_metadata_and_category_filters(self):
-        repo = Repository(config())
-        with patch.object(repo, "connection") as connection:
-            conn = connection.return_value.__enter__.return_value
-            conn.execute.return_value.fetchall.return_value = []
-            repo.search([1.0] + [0.0] * 767, make_service().embedder, ["warranty"], 0.45, 5)
-            sql, params = conn.execute.call_args.args
-            self.assertIn("d.is_active", sql)
-            self.assertIn("d.embedding_model=%s", sql)
-            self.assertIn("d.category = ANY", sql)
-            self.assertEqual(params[4], ["warranty"])
-
-    def test_replace_failure_exits_transaction_with_exception(self):
-        repo = Repository(config())
-        with patch.object(repo, "connection") as connection:
-            context = connection.return_value
-            conn = context.__enter__.return_value
-            conn.execute.return_value.fetchone.return_value = {"id": 1}
-            conn.cursor.return_value.__enter__.return_value.executemany.side_effect = RuntimeError("insert failed")
-            with self.assertRaises(RuntimeError):
-                repo.replace(DocumentRequest(source_key="a", title="A", text="Hello"),
-                             chunk_text("Hello"), [[1.0] + [0.0] * 767], make_service().embedder)
-            self.assertIs(context.__exit__.call_args.args[0], RuntimeError)
 
 
 if __name__ == "__main__":

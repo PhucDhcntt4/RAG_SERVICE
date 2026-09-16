@@ -4,8 +4,6 @@
 !requirements.txt
 !app/
 !app/**
-!database/
-!database/**
 **/__pycache__/
 **/*.pyc
 **/*.pyo

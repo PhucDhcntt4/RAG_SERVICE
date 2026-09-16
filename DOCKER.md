@@ -1,13 +1,13 @@
-# Chạy RAG Service bằng Docker trên Windows
+# Hướng dẫn triển khai RAG Service bằng Docker trên Windows
 
-Gói này chạy API và giao diện trong Linux container; PostgreSQL vẫn chạy trên máy Windows như hiện tại. Container đọc `.env` ở thư mục dự án. Với database đặt tại `127.0.0.1`, `localhost` hoặc `::1`, entrypoint tự đổi host thành `host.docker.internal`, giữ nguyên database, cổng, tài khoản và mật khẩu. Đây là địa chỉ Docker Desktop cung cấp để container kết nối dịch vụ trên máy chủ. [Docker Desktop networking](https://docs.docker.com/desktop/features/networking/networking-how-tos/)
+Gói này chạy API và giao diện trong Linux container; Qdrant chạy trên máy Windows và được container truy cập qua `host.docker.internal:6333`. Container đọc `.env` ở thư mục dự án. [Docker Desktop networking](https://docs.docker.com/desktop/features/networking/networking-how-tos/)
 
 ## 1. Chuẩn bị
 
 - Mở Docker Desktop và dùng Linux containers.
-- Giữ PostgreSQL trên Windows hoạt động, với pgvector và database `RAG_SERVICE` hiện có.
-- Giữ `.env` đầy đủ `DATABASE_URL`, `SEARCH_API_KEY`, `ADMIN_API_KEY`, `GEMINI_API_KEY`.
-- Thư mục `knowlegde` chứa tài liệu đã upload. Các file cũ còn nằm trong `storage/documents` cần chuyển trước bằng `python -m app.migrate_file_names --confirm` khi chạy Python trên Windows.
+- Giữ Qdrant trên Windows hoạt động tại cổng `6333`.
+- Giữ `.env` đầy đủ `QDRANT_URL`, `QDRANT_COLLECTION`, `SEARCH_API_KEY`, `ADMIN_API_KEY`, `GEMINI_API_KEY`.
+- Thư mục `knowlegde` chứa file gốc của tài liệu đã upload.
 - Nếu Uvicorn đang chạy trực tiếp ở cổng 8000, dừng bằng Ctrl+C trong cửa sổ chạy service trước khi bật container ở cùng cổng.
 
 Mở PowerShell:
@@ -20,14 +20,23 @@ cd "D:\ĐÔNG HẢI\DATA\RAG_Service"
 
 ```powershell
 docker compose build
-docker compose run --rm rag python -m app.init_db --confirm
 docker compose up -d
 docker compose ps
 ```
 
-Lệnh init tạo/cập nhật schema được dự án hỗ trợ trong database đã cấu hình; không tạo database mới. Sau đó mở `http://127.0.0.1:8000/`, nhập admin key như khi chạy Python. Swagger ở `/docs`.
+Sau đó mở `http://127.0.0.1:8000/`, nhập admin key như khi chạy Python. Swagger ở `/docs`.
 
-Khi hiển thị `healthy`, tiến trình và kết nối database đã được kiểm tra; healthcheck không gọi Gemini. `up -d` chạy nền nên có thể đóng cửa sổ PowerShell. [Docker Compose up](https://docs.docker.com/reference/cli/docker/compose/up/)
+Khi hiển thị `healthy`, tiến trình API và kết nối Qdrant đã được kiểm tra; healthcheck không gọi Gemini. `up -d` chạy nền nên có thể đóng cửa sổ PowerShell. [Docker Compose up](https://docs.docker.com/reference/cli/docker/compose/up/)
+
+Kiểm tra readiness bằng search key mà không ghi key vào lịch sử lệnh:
+
+```powershell
+$searchKey = Read-Host "SEARCH_API_KEY"
+$headers = @{ Authorization = "Bearer $searchKey" }
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/v1/health/ready" -Headers $headers
+```
+
+Kết quả hợp lệ có `status=ready`, `vector_provider=qdrant`, tên collection và số chunk trong BM25.
 
 ## 3. Bật, tắt và theo dõi
 
@@ -48,10 +57,10 @@ Ctrl+C khi đang xem log chỉ dừng việc theo dõi log. Có thể dùng các
 
 - `.env` được mount chỉ đọc vào container; không nhúng vào image.
 - `knowlegde` được bind mount vào `/app/knowlegde`, nên file upload vẫn xuất hiện ngay trong thư mục Windows, giữ tên/đuôi như hiện tại.
-- PostgreSQL ở ngoài container, nên `stop`, `down` hoặc build lại image không xóa dữ liệu PostgreSQL.
+- Qdrant ở ngoài container, nên `stop`, `down` hoặc build lại image không xóa collection Qdrant.
 - `down` không xóa các file trong thư mục bind mount. Tuy nhiên, thao tác **Xóa tài liệu** trên giao diện vẫn xóa file tương ứng như trước. [Bind mounts](https://docs.docker.com/engine/storage/bind-mounts/)
 
-Khi sao lưu, giữ cả database, `knowlegde` và `.env` riêng tư. Image không chứa các dữ liệu này.
+Khi sao lưu, giữ cả snapshot Qdrant, `knowlegde` và `.env` riêng tư. Image không chứa các dữ liệu này.
 
 ## 5. Cập nhật
 
@@ -59,7 +68,6 @@ Sau khi sửa code:
 
 ```powershell
 docker compose build
-docker compose run --rm rag python -m app.init_db --confirm
 docker compose up -d
 ```
 
@@ -88,8 +96,8 @@ Bot chạy trực tiếp trên cùng Windows dùng `http://127.0.0.1:8000`. Nế
 - **`lookup registry-1.docker.io: no such host` khi build:** Docker không phân giải được tên miền Docker Hub. Nếu đã có image `donghai-rag-service:local`, bật ngay bằng `docker compose up -d --no-build --pull never`; không cần build lại mỗi lần bật server. Lệnh này không truy cập registry để lấy image, nhưng các chức năng gọi Gemini vẫn cần Internet. Khi cần build bản code mới, khôi phục kết nối DNS/Internet của Docker Desktop rồi chạy build lại.
 - **Port is already allocated:** service Python cũ hoặc ứng dụng khác đang dùng cổng 8000. Dừng đúng ứng dụng đó hoặc đổi `RAG_HTTP_PORT`.
 - **Cannot connect to Docker daemon:** mở Docker Desktop và đợi engine sẵn sàng.
-- **Invalid RAG configuration:** kiểm tra `.env`, các key và chuỗi kết nối DB.
-- **Unhealthy / HTTP 503:** xem log; kiểm tra PostgreSQL Windows đang chạy, cổng và cấu hình cho phép kết nối từ Docker Desktop. Không thay `pg_hba.conf` thành `trust` cho toàn mạng. Chỉ cho phép nguồn kết nối cần thiết nếu PostgreSQL chưa cho phép Docker truy cập.
+- **Invalid RAG configuration:** kiểm tra `.env`, các API key, `QDRANT_URL`, collection và giới hạn cấu hình.
+- **Unhealthy / HTTP 503:** xem log; kiểm tra Qdrant đang chạy tại cổng `6333` và container truy cập được `host.docker.internal:6333`.
 - **Không ghi được file:** kiểm tra quyền/chia sẻ thư mục `knowlegde` với Docker Desktop.
 
-Gói Compose này hướng tới Docker Desktop trên Windows. Trên Linux server, cần cấu hình host DB thực tế hoặc ánh xạ host gateway, đồng thời bảo đảm UID 10001 có quyền ghi thư mục tài liệu.
+Gói Compose này hướng tới Docker Desktop trên Windows. Trên Linux server, đặt `QDRANT_URL` thành địa chỉ Qdrant mà container truy cập được hoặc đưa hai service vào cùng Docker network; đồng thời bảo đảm UID 10001 có quyền ghi thư mục tài liệu.

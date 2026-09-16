@@ -9,7 +9,7 @@ services:
     ports:
       - "127.0.0.1:${RAG_HTTP_PORT:-8000}:8000"
     environment:
-      RAG_DATABASE_HOST_OVERRIDE: host.docker.internal
+      QDRANT_URL: http://host.docker.internal:6333
     volumes:
       - type: bind
         source: ./.env

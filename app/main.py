@@ -6,7 +6,7 @@ from typing import Annotated
 from urllib.parse import quote
 from uuid import uuid4
 
-import psycopg
+import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -20,7 +20,7 @@ from app.chat import ChatError, GeminiChat
 from app.embeddings import EmbeddingError, GeminiEmbedder
 from app.models import ActiveRequest, ChatRequest, ChatResponse, DocumentRequest, SearchRequest, SearchResponse
 from app.local_admin import allow_local_admin
-from app.repository import Repository
+from app.qdrant_repository import QdrantRepository
 from app.service import InvalidDocument, KnowledgeService, ServiceBusy
 from app.storage import StorageError
 
@@ -101,29 +101,42 @@ def create_app(settings=None, service=None, chat=None):
         # Third-party debug logs can include HTTP data. Keep our logs separate.
         for name in ("httpx", "httpx2", "httpcore", "httpcore2", "google_genai"):
             logging.getLogger(name).setLevel(logging.WARNING)
-        # PDF parser warnings can contain fragments of uploaded bytes.
-        pdf_logger = logging.getLogger("pypdf")
-        pdf_logger.handlers = [logging.NullHandler()]
-        pdf_logger.propagate = False
         application.state.settings = config
         owned_embedder = None
         owned_chat = None
+        owned_repository = None
         try:
             if chat is None:
                 owned_chat = GeminiChat(config)
             application.state.chat = chat if chat is not None else owned_chat
             if service is None:
                 owned_embedder = GeminiEmbedder(config)
-                application.state.service = KnowledgeService(config, Repository(config), owned_embedder)
+                owned_repository = QdrantRepository(config)
+                application.state.service = KnowledgeService(
+                    config, owned_repository, owned_embedder
+                )
             else:
                 application.state.service = service
-            logger.info("RAG SERVICE started model=%s dimension=768", config.rag_embedding_model)
+            try:
+                indexed_chunks = (application.state.service.refresh_bm25()
+                                  if config.rag_hybrid_enabled else 0)
+            except Exception as exc:
+                # Keep liveness available while Qdrant is starting. The first
+                # search retries the lazy BM25 load and readiness still checks it.
+                indexed_chunks = 0
+                logger.warning("RAG BM25 startup load failed error_type=%s",
+                               type(exc).__name__)
+            logger.info("RAG SERVICE started vector_provider=qdrant model=%s "
+                        "dimension=768 bm25_chunks=%s",
+                        config.rag_embedding_model, indexed_chunks)
             yield
         finally:
             if owned_chat is not None:
                 owned_chat.close()
             if owned_embedder is not None:
                 owned_embedder.close()
+            if owned_repository is not None and hasattr(owned_repository, "close"):
+                owned_repository.close()
 
     application = FastAPI(title="Đông Hải RAG Service", version="1.0.0", lifespan=lifespan)
     application.add_middleware(RequestGuard, owner=application)
@@ -175,10 +188,11 @@ def create_app(settings=None, service=None, chat=None):
 
     @application.exception_handler(EmbeddingError)
     @application.exception_handler(StorageError)
-    @application.exception_handler(psycopg.Error)
+    @application.exception_handler(httpx.HTTPError)
     async def upstream_error(request, exc):
         logger.error("RAG dependency unavailable error_type=%s", type(exc).__name__)
-        return JSONResponse({"detail": "RAG tạm thời không khả dụng; vui lòng thử lại"},
+        detail = exc.public_message if isinstance(exc, EmbeddingError) else "RAG tạm thời không khả dụng; vui lòng thử lại"
+        return JSONResponse({"detail": detail},
                             status_code=503, headers={"Retry-After": "5"})
 
     @application.exception_handler(ChatError)
@@ -205,9 +219,12 @@ def create_app(settings=None, service=None, chat=None):
         return {"status": "alive"}
 
     @application.get("/api/v1/health/ready", dependencies=[Depends(authorize)], tags=["Health"])
-    def ready(svc=Depends(current_service)):
+    def ready(request: Request, svc=Depends(current_service)):
         svc.repository.ready()
-        return {"status": "ready", "embedding_provider_checked": False}
+        return {"status": "ready", "embedding_provider_checked": False,
+                "vector_provider": "qdrant",
+                "qdrant_collection": request.app.state.settings.qdrant_collection,
+                "bm25_indexed_chunks": svc.bm25_count}
 
     @application.post("/api/v1/knowledge/search", response_model=SearchResponse,
                       dependencies=[Depends(authorize)], tags=["Search"])
@@ -231,12 +248,13 @@ def create_app(settings=None, service=None, chat=None):
             data = file.file.read(svc.settings.rag_max_upload_bytes + 1)
             if len(data) > svc.settings.rag_max_upload_bytes:
                 raise HTTPException(413, "File vượt giới hạn dung lượng")
-            text = svc.extract(file.filename or "", data)
+            text, prepared_chunks = svc.prepare_upload(file.filename or "", data)
             try:
                 payload = DocumentRequest(source_key=source_key, title=title, category=category, text=text)
             except ValidationError as exc:
                 raise HTTPException(422, "Tên nguồn, tiêu đề, nhóm hoặc nội dung không hợp lệ") from exc
-            return svc.ingest(payload, original_data=data, original_filename=file.filename)
+            return svc.ingest(payload, original_data=data, original_filename=file.filename,
+                              prepared_chunks=prepared_chunks)
         finally:
             file.file.close()
 
@@ -270,7 +288,7 @@ def create_app(settings=None, service=None, chat=None):
 
     @application.patch("/api/v1/documents/{document_id}", dependencies=[Depends(admin)], tags=["Documents"])
     def active(document_id: int, payload: ActiveRequest, svc=Depends(current_service)):
-        row = svc.repository.set_active(document_id, payload.is_active)
+        row = svc.set_active(document_id, payload.is_active)
         if row is None:
             raise HTTPException(404, "Không tìm thấy tài liệu")
         return row

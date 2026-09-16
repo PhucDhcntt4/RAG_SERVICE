@@ -2,6 +2,9 @@
 .env.*
 !.env.example
 .venv/
+.ua/
+.vscode/
+tmp/
 __pycache__/
 *.py[cod]
 .pytest_cache/

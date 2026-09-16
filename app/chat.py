@@ -7,11 +7,12 @@ from time import perf_counter
 
 from google import genai
 from google.genai import types
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from app.models import SearchRequest
 from app.debug_log import debug_event
 from app.service import ServiceBusy
+from app.retrieval import needs_document_context, needs_section_context
 
 logger = logging.getLogger('rag_service')
 PROMPT_DIR = Path(__file__).resolve().parent / 'prompts'
@@ -38,8 +39,12 @@ class ResolvedQuestion(BaseModel):
 
 
 class AnswerStatement(BaseModel):
-    text: str = Field(min_length=1, max_length=1000)
-    citations: list[int] = Field(min_length=1, max_length=20)
+    # The final answer has its own configured total bound. A list model may
+    # occasionally group many rows into one statement even when the prompt asks
+    # for one row per statement, so a smaller per-statement cap caused valid
+    # complete lists to fail with a 503 after generation.
+    text: str = Field(min_length=1, max_length=20000)
+    citations: list[int] = Field(min_length=1, max_length=100)
 
 
 class AnswerDraft(BaseModel):
@@ -103,6 +108,16 @@ class GeminiChat:
             return result
         except Exception as exc:
             code = getattr(exc, 'code', None)
+            if isinstance(exc, ValidationError):
+                issues = [
+                    {
+                        'loc': '.'.join(str(part) for part in issue.get('loc', ())),
+                        'type': issue.get('type'),
+                    }
+                    for issue in exc.errors(include_input=False, include_url=False)
+                ]
+                logger.warning('RAG response schema invalid stage=%s issues=%s',
+                               stage, issues)
             debug_event('RAG LLM FAILED', stage=stage, model=self.model,
                         http_code=code if isinstance(code, int) else None, error_type=type(exc).__name__,
                         time_ms=round((perf_counter() - started) * 1000, 2))
@@ -139,14 +154,17 @@ class GeminiChat:
         debug_event('RAG CHAT QUERY', original_query=request.query, retrieval_query=query,
                     rewritten=query != request.query, categories=request.categories or [])
         found = service.search(SearchRequest(query=query, categories=request.categories,
-                                             top_k=request.top_k), numbered_sources=True)
+                                             top_k=request.top_k), numbered_sources=True,
+                               expand_documents=needs_document_context(query),
+                               expand_sections=needs_section_context(query))
         response = {'answer': load_prompt('no_answer.txt'), 'status': 'insufficient_context', 'sources': [],
                     'retrieval_query': query, 'context': found['content'], 'model': self.model}
         if found['success'] and found['sources']:
             draft = self.generate(
                 self.answer_prompt(),
                 {'question': request.query, 'resolved_question': query,
-                 'history': history, 'context': found['content']}, AnswerDraft)
+                 'history': history, 'context': found['content'],
+                 'retrieval_coverage': found.get('retrieval_coverage', {})}, AnswerDraft)
             if draft.sufficient:
                 if len(draft.statements) > self.max_statements:
                     raise ChatError(f'Câu trả lời vượt giới hạn {self.max_statements} ý. Hãy thu hẹp câu hỏi hoặc điều chỉnh RAG_CHAT_MAX_STATEMENTS.')
