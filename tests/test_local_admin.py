@@ -1,5 +1,6 @@
 import unittest
-from unittest.mock import Mock
+from ipaddress import ip_address
+from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
 
@@ -50,6 +51,16 @@ class LocalAdminTests(unittest.TestCase):
                 self.assertEqual(client.post('/admin-api/v1/documents/upload', headers=self.headers,
                     content=b'invalid body').status_code, 403)
         self.service.storage.save.assert_not_called()
+
+    @patch('app.local_admin._docker_default_gateway',
+           return_value=ip_address('172.18.0.1'))
+    def test_docker_gateway_can_use_local_dashboard_but_other_private_peers_cannot(self, _gateway):
+        with self.client('172.18.0.1') as client:
+            self.assertEqual(client.get('/admin-api/v1/documents',
+                                        headers=self.headers).status_code, 200)
+        with self.client('172.18.0.2') as client:
+            self.assertEqual(client.get('/admin-api/v1/documents',
+                                        headers=self.headers).status_code, 403)
 
     def test_cross_origin_forwarded_and_missing_custom_header_are_denied(self):
         variations = [{}, {**self.headers, 'Origin': 'https://attacker.example'},

@@ -29,6 +29,7 @@ def make_service(settings=None):
     repo.replace.return_value = {"id": 1, "chunk_count": 1}
     repo.list_documents.return_value = []
     repo.get_document.return_value = None
+    repo.get_document_by_source_key.return_value = None
     repo.delete.return_value = None
     repo.set_active.return_value = None
     embedder = Mock(provider="gemini", model="gemini-embedding-001", dimension=768)
@@ -208,6 +209,36 @@ class APITests(unittest.TestCase):
                                    json={"source_key": "a.txt", "title": "A", "text": "Kiểm thử"})
         self.assertEqual(response.status_code, 200)
         self.svc.repository.replace.assert_called_once()
+
+    def test_admin_get_document_by_exact_source_key(self):
+        expected = {
+            "id": "123",
+            "source_key": "shipping/order-policy",
+            "title": "Đặt hàng vận chuyển",
+        }
+        self.svc.repository.get_document_by_source_key.return_value = expected
+        response = self.client.get(
+            "/api/v1/documents/by-source-key",
+            params={"source_key": "shipping/order-policy"},
+            headers=self.admin_headers,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), expected)
+        self.svc.repository.get_document_by_source_key.assert_called_once_with(
+            "shipping/order-policy"
+        )
+
+    def test_source_key_lookup_requires_admin_and_returns_404(self):
+        path = "/api/v1/documents/by-source-key?source_key=missing"
+        self.assertEqual(self.client.get(path).status_code, 401)
+        self.assertEqual(
+            self.client.get(path, headers=self.search_headers).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.client.get(path, headers=self.admin_headers).status_code,
+            404,
+        )
 
     def test_admin_upload(self):
         response = self.client.post("/api/v1/documents/upload", headers=self.admin_headers,

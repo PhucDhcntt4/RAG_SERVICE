@@ -1,9 +1,20 @@
+# Python 3.11+
+
+# HTTP API và server
 fastapi==0.139.0
 uvicorn[standard]==0.49.0
-pydantic==2.12.5
 python-multipart==0.0.32
+
+# Cấu hình và kiểm tra dữ liệu
+pydantic==2.12.5
 python-dotenv==1.0.1
+
+# Gemini: embedding, rewrite câu hỏi và sinh câu trả lời
 google-genai==2.8.0
-pymupdf==1.28.2
-# Client ví dụ và kiểm thử API
+
+# Qdrant REST, Gemini transport, API client mẫu và FastAPI TestClient
 httpx==0.28.1
+
+# Đọc PDF, nhận diện bố cục và bảng
+pymupdf==1.28.2
+qdrant-client
