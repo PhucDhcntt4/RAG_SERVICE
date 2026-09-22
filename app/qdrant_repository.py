@@ -122,6 +122,8 @@ class QdrantRepository:
             "source_key": payload.get("source_key"),
             "title": payload.get("title"),
             "category": payload.get("category"),
+            "doc_type_id": payload.get("doc_type_id"),
+            "group_id": payload.get("group_id"),
             "heading": payload.get("heading"),
             "section_path": payload.get("section_path") or [],
             "chunk_index": payload.get("chunk_index", 0),
@@ -167,6 +169,8 @@ class QdrantRepository:
                 "source_key": document.source_key,
                 "title": document.title,
                 "category": document.category,
+                "doc_type_id": document.doc_type_id,
+                "group_id": document.group_id,
                 "heading": chunk.heading,
                 "section_path": list(chunk.section_path),
                 "chunk_index": chunk.index,
@@ -207,6 +211,8 @@ class QdrantRepository:
             "source_key": document.source_key,
             "title": document.title,
             "category": document.category,
+            "doc_type_id": document.doc_type_id,
+            "group_id": document.group_id,
             "is_active": old_payload.get("is_active", True),
             "updated_at": now,
             "chunk_count": len(chunks),
@@ -278,6 +284,8 @@ class QdrantRepository:
             "source_key": payload.get("source_key"),
             "title": payload.get("title"),
             "category": payload.get("category"),
+            "doc_type_id": payload.get("doc_type_id"),
+            "group_id": payload.get("group_id"),
             "source_text": payload.get("source_text", ""),
             "source_checksum": payload.get("source_checksum"),
             "embedding_provider": payload.get("embedding_provider"),
@@ -309,12 +317,35 @@ class QdrantRepository:
         return [self._document_row(value["payload"], value["count"])
                 for value in documents.values()]
 
-    def list_documents(self, limit, offset):
+    def list_documents(self, limit, offset, *, doc_type_id=None, group_id=None,
+                       categories=None):
         rows = self._documents()
+        category_set = set(categories or ())
+        if group_id is not None:
+            rows = [
+                row for row in rows
+                if self._same_identifier(row.get("group_id"), group_id)
+                or (row.get("group_id") is None
+                    and row.get("category") in category_set)
+            ]
+        elif doc_type_id is not None:
+            rows = [
+                row for row in rows
+                if self._same_identifier(row.get("doc_type_id"), doc_type_id)
+                or (row.get("doc_type_id") is None
+                    and row.get("category") in category_set)
+            ]
         rows.sort(key=lambda row: (
             row.get("updated_at") or "", int(row["id"])
         ), reverse=True)
         return rows[offset:offset + limit]
+
+    @staticmethod
+    def _same_identifier(value, expected):
+        try:
+            return int(value) == int(expected)
+        except (TypeError, ValueError):
+            return False
 
     def get_document(self, document_id):
         document_id = int(document_id)
@@ -329,6 +360,64 @@ class QdrantRepository:
             points[0].get("payload") or {},
         )
         return self._document_row(payload, len(points))
+
+    def get_document_by_source_key(self, source_key):
+        points = self._points_for_source(source_key)
+        if not points:
+            return None
+        payload = next(
+            (point.get("payload") or {} for point in points
+             if (point.get("payload") or {}).get("chunk_index") == 0),
+            points[0].get("payload") or {},
+        )
+        return self._document_row(payload, len(points))
+
+    def list_categories(self):
+        return sorted({row["category"] for row in self._documents() if row.get("category")})
+
+    def count_documents_by_group(self, group_id, category=None):
+        return sum(
+            1 for row in self._documents()
+            if row.get("group_id") == group_id
+            or (row.get("group_id") is None and category and row.get("category") == category)
+        )
+
+    def backfill_classification(self, category, doc_type_id, group_id):
+        self._request(
+            "POST",
+            self.collection_path + "/points/payload?wait=true",
+            json={
+                "payload": {"doc_type_id": doc_type_id, "group_id": group_id},
+                "filter": self._filter([self._match("category", category)]),
+            },
+        )
+
+    def set_classification(self, document_id, *, category, doc_type_id, group_id):
+        document_id = int(document_id)
+        row = self.get_document(document_id)
+        if row is None:
+            return None
+        now = datetime.now(timezone.utc).isoformat()
+        self._request(
+            "POST",
+            self.collection_path + "/points/payload?wait=true",
+            json={
+                "payload": {
+                    "category": category,
+                    "doc_type_id": doc_type_id,
+                    "group_id": group_id,
+                    "updated_at": now,
+                },
+                "filter": self._filter([self._match("document_id", document_id)]),
+            },
+        )
+        return {
+            "id": str(document_id),
+            "category": category,
+            "doc_type_id": doc_type_id,
+            "group_id": group_id,
+            "updated_at": now,
+        }
 
     def set_active(self, document_id, active):
         document_id = int(document_id)

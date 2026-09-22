@@ -143,6 +143,7 @@ class GeminiChat:
         history = [message.model_dump() for message in request.history]
         query = request.query
         debug_event('RAG CHAT INPUT', query=query, categories=request.categories or [],
+                    doc_type_id=request.doc_type_id, group_ids=request.group_ids or [],
                     history_messages=len(history), model=self.model)
         if history:
             rewritten = self.generate(
@@ -164,6 +165,11 @@ class GeminiChat:
                 self.answer_prompt(),
                 {'question': request.query, 'resolved_question': query,
                  'history': history, 'context': found['content'],
+                 'retrieval_scope': {
+                     'doc_type_id': request.doc_type_id,
+                     'group_ids': request.group_ids or [],
+                     'categories': request.categories or [],
+                 },
                  'retrieval_coverage': found.get('retrieval_coverage', {})}, AnswerDraft)
             if draft.sufficient:
                 if len(draft.statements) > self.max_statements:

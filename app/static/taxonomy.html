@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Loại và nhóm tài liệu · Đông Hải</title>
+    <link rel="stylesheet" href="/assets/admin.css" />
+    <script src="/assets/taxonomy.js" defer></script>
+  </head>
+  <body>
+    <aside class="sidebar">
+      <a class="brand" href="/" aria-label="Đông Hải, trang chủ"
+        ><span class="brand-mark">ĐH</span
+        ><span>ĐÔNG HẢI<small>TRUNG TÂM DỮ LIỆU</small></span></a
+      >
+      <div class="nav-label">KHÔNG GIAN LÀM VIỆC</div>
+      <a class="nav-item" href="/">
+        <span aria-hidden="true"></span> Kho tài liệu
+      </a>
+      <a class="nav-item selected" href="/taxonomy" aria-current="page"
+        ><span aria-hidden="true"></span> Loại và nhóm tài liệu</a
+      >
+      <a class="nav-item" href="/products">
+        <span aria-hidden="true"></span>
+        Sản phẩm
+      </a>
+      <div class="sidebar-note">
+        <span class="note-symbol" aria-hidden="true">✦</span
+        ><strong>Phân loại rõ ràng.<br />Tìm kiếm chính xác.</strong>
+        <p>
+          Mỗi nhóm thuộc một loại tài liệu và có thể dùng cho nhiều tài liệu.
+        </p>
+      </div>
+      <div class="sidebar-footer">
+        <span class="mini-mark">ĐH</span> RAG Service
+        <span class="version">v1.0</span>
+      </div>
+    </aside>
+    <main>
+      <header class="topbar">
+        <span
+          >Không gian quản trị <span class="slash">/</span>
+          <strong>Loại &amp; nhóm tài liệu</strong></span
+        ><span class="connection" id="connection">Chưa kết nối</span>
+      </header>
+      <div class="workspace">
+        <div class="page-heading">
+          <div>
+            <div class="eyebrow">PHÂN LOẠI TÀI LIỆU</div>
+            <h1>Loại &amp; nhóm tài liệu</h1>
+            <p>
+              Mã là định danh cố định dùng trong hệ thống. Bạn có thể đổi tên,
+              mô tả, trạng thái và chuyển nhóm sang loại cha khác mà không tạo
+              lại embedding.
+            </p>
+          </div>
+          <div class="heading-actions">
+            <button
+              class="secondary"
+              id="refresh-taxonomy"
+              disabled
+              aria-label="Làm mới"
+            >
+              ↻
+            </button>
+            <button class="secondary" id="disconnect" hidden>
+              Ngắt kết nối
+            </button>
+            <button class="primary" id="add-doc-type" disabled>
+              ＋ Thêm loại
+            </button>
+          </div>
+        </div>
+
+        <section
+          class="login-card"
+          id="login-panel"
+          hidden
+          aria-labelledby="login-title"
+        >
+          <div class="login-icon" aria-hidden="true">⌘</div>
+          <div class="login-content">
+            <h2 id="login-title">Kết nối trang phân loại</h2>
+            <p>Nhập admin key nếu bạn không truy cập trực tiếp từ localhost.</p>
+            <form id="login-form">
+              <label class="sr-only" for="admin-key">Admin key</label>
+              <div class="key-field">
+                <input
+                  id="admin-key"
+                  type="password"
+                  placeholder="Nhập ADMIN_API_KEY"
+                  required
+                />
+                <button type="button" class="text-button" id="toggle-key">
+                  Hiện
+                </button>
+                <button class="primary" id="connect-button">Kết nối</button>
+              </div>
+              <p id="login-error" class="field-error" role="alert"></p>
+            </form>
+          </div>
+        </section>
+
+        <p id="notice" class="notice" role="status" hidden></p>
+
+        <section
+          class="taxo-panel"
+          id="taxo-panel"
+          hidden
+          aria-labelledby="taxo-title"
+        >
+          <h2 id="taxo-title" class="sr-only">
+            Danh sách loại và nhóm tài liệu
+          </h2>
+          <div class="taxo-toolbar">
+            <div class="taxo-search">
+              <span aria-hidden="true">⌕</span>
+              <input
+                id="taxo-search"
+                type="search"
+                placeholder="Tìm loại hoặc nhóm…"
+                autocomplete="off"
+              />
+            </div>
+            <div class="taxo-counts">
+              <span class="count-pill" id="doc-type-count">0 loại</span>
+              <span class="count-pill" id="group-count">0 nhóm</span>
+            </div>
+          </div>
+          <div id="taxo-tree" class="taxo-tree"></div>
+          <div id="taxo-empty" class="taxo-empty" hidden>
+            <p id="taxo-empty-title">Chưa có loại tài liệu nào</p>
+            <p id="taxo-empty-description">
+              Thêm loại đầu tiên để bắt đầu phân loại tài liệu.
+            </p>
+            <button class="secondary" id="taxo-empty-add" type="button">
+              ＋ Thêm loại
+            </button>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <dialog id="doc-type-dialog" aria-labelledby="doc-type-dialog-title">
+      <div class="dialog-heading">
+        <div>
+          <div class="eyebrow">LOẠI TÀI LIỆU</div>
+          <h2 id="doc-type-dialog-title">Thêm loại</h2>
+        </div>
+        <button
+          type="button"
+          class="icon-button"
+          id="close-doc-type"
+          aria-label="Đóng"
+        >
+          ×
+        </button>
+      </div>
+      <form id="doc-type-form">
+        <input id="doc-type-id" type="hidden" />
+        <label class="field"
+          >Mã<input
+            id="doc-type-code"
+            maxlength="100"
+            pattern="[a-z0-9][a-z0-9_-]*"
+            placeholder="Ví dụ: public"
+            required
+        /></label>
+        <label class="field"
+          >Tên<input
+            id="doc-type-name"
+            maxlength="200"
+            placeholder="Tên loại tài liệu"
+            required
+        /></label>
+        <label class="field"
+          >Mô tả<input
+            id="doc-type-description"
+            maxlength="2000"
+            placeholder="Mô tả ngắn (không bắt buộc)"
+        /></label>
+        <label class="checkbox-field"
+          ><input id="doc-type-active" type="checkbox" checked /> Đang sử
+          dụng</label
+        >
+        <p id="doc-type-error" class="field-error" role="alert"></p>
+        <div class="dialog-footer">
+          <button type="button" class="secondary" id="cancel-doc-type">
+            Hủy
+          </button>
+          <button class="primary" id="save-doc-type">Thêm loại</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="group-dialog" aria-labelledby="group-dialog-title">
+      <div class="dialog-heading">
+        <div>
+          <div class="eyebrow">NHÓM TÀI LIỆU</div>
+          <h2 id="group-dialog-title">Thêm nhóm</h2>
+        </div>
+        <button
+          type="button"
+          class="icon-button"
+          id="close-group"
+          aria-label="Đóng"
+        >
+          ×
+        </button>
+      </div>
+      <form id="group-form">
+        <input id="group-id" type="hidden" />
+        <label class="field"
+          >Loại cha<select id="group-doc-type" required></select
+        ></label>
+        <label class="field"
+          >Mã<input
+            id="group-code"
+            maxlength="100"
+            pattern="[a-z0-9][a-z0-9_-]*"
+            placeholder="Ví dụ: warranty"
+            required
+        /></label>
+        <label class="field"
+          >Tên<input
+            id="group-name"
+            maxlength="200"
+            placeholder="Tên nhóm tài liệu"
+            required
+        /></label>
+        <label class="field"
+          >Mô tả<input
+            id="group-description"
+            maxlength="2000"
+            placeholder="Mô tả ngắn (không bắt buộc)"
+        /></label>
+        <label class="checkbox-field"
+          ><input id="group-active" type="checkbox" checked /> Đang sử
+          dụng</label
+        >
+        <p id="group-error" class="field-error" role="alert"></p>
+        <div class="dialog-footer">
+          <button type="button" class="secondary" id="cancel-group">Hủy</button>
+          <button class="primary" id="save-group">Thêm nhóm</button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>

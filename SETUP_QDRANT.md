@@ -1,6 +1,6 @@
 # Cài đặt source code và kết nối Qdrant
 
-Tài liệu này hướng dẫn chạy trực tiếp RAG Service bằng Python trên Windows và kết nối tới một Qdrant đang hoạt động. Không cần PostgreSQL, pgvector hoặc Docker cho RAG Service.
+Tài liệu này hướng dẫn chạy trực tiếp RAG Service bằng Python trên Windows và kết nối tới một Qdrant đang hoạt động. Bản hiện tại cần thêm PostgreSQL để quản lý loại tài liệu và nhóm; không dùng pgvector. Xem cấu hình tại [POSTGRES_TAXONOMY.md](POSTGRES_TAXONOMY.md).
 
 ## 1. Mô hình kết nối
 
@@ -11,6 +11,7 @@ Trình duyệt / Bot
 RAG Service (FastAPI)
         ├── Gemini API: embedding, rewrite, answer
         ├── Qdrant REST :6333: vector và metadata chunk
+        ├── PostgreSQL : loại tài liệu và nhóm
         └── knowlegde/: file tài liệu gốc
 ```
 
@@ -21,6 +22,7 @@ Qdrant phải cho phép máy chạy RAG Service truy cập REST API. Khi cả ha
 - Windows 10/11 hoặc Windows Server.
 - Python 3.11 trở lên; khuyến nghị Python 3.12.
 - Qdrant đang chạy và mở REST port `6333`.
+- PostgreSQL 16 đang chạy và có database/user dành cho RAG Service.
 - Gemini API key có quyền dùng model embedding và chat đã cấu hình.
 - PowerShell.
 
@@ -141,6 +143,14 @@ Nếu lệnh báo `ValidationError`, sửa đúng biến được nêu trong th�
 ```powershell
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
+
+Nếu sử dụng đồng bộ sản phẩm Shopify, mở thêm một cửa sổ PowerShell và chạy worker:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.product_sync.worker
+```
+
+API chỉ tạo và theo dõi job; worker là tiến trình nhận job, ghi catalog/ảnh vào Qdrant và chạy lịch đồng bộ tồn kho. Khi chạy bằng Docker Compose, service `product-worker` đã thực hiện phần này tự động.
 
 Giữ cửa sổ PowerShell này mở. Sau đó truy cập:
 

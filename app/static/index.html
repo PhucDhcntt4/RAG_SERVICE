@@ -11,12 +11,19 @@
     <aside class="sidebar">
       <a class="brand" href="/" aria-label="Đông Hải, trang chủ"
         ><span class="brand-mark">ĐH</span
-        ><span>ĐÔNG HẢI<small>TRUNG TÂM TRI THỨC</small></span></a
+        ><span>ĐÔNG HẢI<small>TRUNG TÂM DỮ LIỆU</small></span></a
       >
       <div class="nav-label">KHÔNG GIAN LÀM VIỆC</div>
       <a class="nav-item selected" href="/" aria-current="page"
-        ><span aria-hidden="true">▤</span> Kho tài liệu</a
+        ><span aria-hidden="true"></span> Kho tài liệu</a
       >
+      <a class="nav-item" href="/taxonomy"
+        ><span aria-hidden="true"></span> Loại và nhóm tài liệu</a
+      >
+      <a class="nav-item" href="/products">
+        <span aria-hidden="true"></span>
+        Sản phẩm
+      </a>
       <div class="sidebar-note">
         <span class="note-symbol" aria-hidden="true">✦</span
         ><strong>Thông tin tốt hơn.<br />Câu trả lời tốt hơn.</strong>
@@ -98,6 +105,14 @@
               <p>Nguồn kiến thức được sử dụng khi tìm kiếm.</p>
             </div>
             <div class="toolbar">
+              <label class="sr-only" for="filter-type">Lọc theo loại</label>
+              <select class="filter-select" id="filter-type" disabled>
+                <option value="">Tất cả loại</option>
+              </select>
+              <label class="sr-only" for="filter-group">Lọc theo nhóm</label>
+              <select class="filter-select" id="filter-group" disabled>
+                <option value="">Tất cả nhóm</option>
+              </select>
               <button class="secondary" id="refresh" disabled>
                 ↻ <span>Làm mới</span></button
               ><button class="text-button" id="disconnect" hidden>
@@ -123,8 +138,9 @@
             <table>
               <thead>
                 <tr>
+                  <th>TÊN TÀI LIỆU</th>
+                  <th>LOẠI TÀI LIỆU</th>
                   <th>TÀI LIỆU</th>
-                  <th>NHÓM</th>
                   <th>TRẠNG THÁI</th>
                   <th>CẬP NHẬT</th>
                   <th><span class="sr-only">Thao tác</span></th>
@@ -179,28 +195,16 @@
             maxlength="500"
             required
         /></label>
+        <label class="field" for="document-type"
+          >Loại tài liệu<select id="document-type" required></select
+        ></label>
         <label class="field" for="document-category"
-          >Nhóm tài liệu<select id="document-category" name="category">
-            <option value="store">Cửa hàng</option>
-            <option value="size_guide">Hướng dẫn chọn size</option>
-            <option value="warranty">Bảo hành</option>
-            <option value="returns">Đổi trả</option>
-            <option value="shipping">Giao hàng</option>
-            <option value="promotion">Khuyến mãi</option>
-            <option value="customer_care">Chăm sóc khách hàng</option>
-            <option value="custom">Nhóm khác…</option>
-          </select></label
-        >
-        <label
-          class="field"
-          id="custom-category-field"
-          for="custom-category"
-          hidden
-          >Mã nhóm<input
-            id="custom-category"
-            maxlength="100"
-            placeholder="Ví dụ: product_info"
-        /></label>
+          >Tài liệu<select
+            id="document-category"
+            name="group_id"
+            required
+          ></select
+        ></label>
         <p class="form-hint">
           Mỗi lần thêm sẽ tạo một tài liệu mới. Chỉ đóng cửa sổ sau khi có kết
           quả xử lý.
@@ -209,6 +213,37 @@
         <div class="dialog-footer">
           <button type="button" class="secondary" id="cancel-upload">Hủy</button
           ><button class="primary" id="submit-upload">Thêm tài liệu</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="classification-dialog" aria-labelledby="classification-title">
+      <div class="dialog-heading">
+        <div>
+          <div class="eyebrow">PHÂN LOẠI</div>
+          <h2 id="classification-title">Đổi phân loại tài liệu</h2>
+        </div>
+        <button
+          type="button"
+          class="icon-button"
+          id="close-classification"
+          aria-label="Đóng"
+        >
+          ×
+        </button>
+      </div>
+      <form id="classification-form">
+        <input id="classification-document-id" type="hidden" />
+        <label class="field"
+          >Loại tài liệu<select id="classification-type" required></select
+        ></label>
+        <label class="field"
+          >Nhóm tài liệu<select id="classification-group" required></select
+        ></label>
+        <p id="classification-error" class="field-error" role="alert"></p>
+        <div class="dialog-footer">
+          <button type="button" class="secondary" id="cancel-classification">
+            Hủy</button
+          ><button class="primary">Lưu phân loại</button>
         </div>
       </form>
     </dialog>
@@ -262,10 +297,29 @@
         </button>
       </div>
       <p class="preview-hint">
-        Trợ lý trả lời dựa trên kho tài liệu và trích dẫn nguồn để đối chiếu.
-        Hỗ trợ câu hỏi tiếp nối với tối đa 6 lượt gần nhất (tùy độ dài).
-        Lịch sử chỉ giữ trong bộ nhớ trang; bấm Xóa hội thoại để bắt đầu chủ đề mới.
+        Trợ lý trả lời dựa trên kho tài liệu và trích dẫn nguồn để đối chiếu. Hỗ
+        trợ câu hỏi tiếp nối với tối đa 6 lượt gần nhất (tùy độ dài). Lịch sử
+        chỉ giữ trong bộ nhớ trang; bấm Xóa hội thoại để bắt đầu chủ đề mới.
       </p>
+      <div class="chat-scope" aria-labelledby="chat-scope-title">
+        <div class="chat-scope-info">
+          <span class="chat-scope-icon" aria-hidden="true">⌕</span>
+          <div>
+            <strong id="chat-scope-title">Phạm vi tài liệu</strong>
+            <p id="chat-scope-summary">Tất cả tài liệu đang sử dụng</p>
+          </div>
+        </div>
+        <label class="field" for="chat-doc-type"
+          >Loại tài liệu<select id="chat-doc-type">
+            <option value="">Tất cả loại</option>
+          </select></label
+        >
+        <label class="field" for="chat-group"
+          >Nhóm tài liệu<select id="chat-group">
+            <option value="">Tất cả nhóm</option>
+          </select></label
+        >
+      </div>
       <div id="chat-log" class="chat-log" role="log" aria-live="polite">
         <div class="chat-empty" id="chat-empty">
           Hỏi về tài liệu nội bộ. Bạn có thể hỏi tiếp trong cùng hội thoại.

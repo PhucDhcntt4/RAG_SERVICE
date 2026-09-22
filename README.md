@@ -1,6 +1,6 @@
 # Đông Hải RAG Service
 
-Dự án RAG độc lập với `BOT_Conversation_V2`. Nhận tài liệu → chia đoạn → tạo embedding → lưu Qdrant → tìm nội dung liên quan qua HTTP API.
+Dự án RAG độc lập với `BOT_Conversation_V2`. Nhận tài liệu → chia đoạn → tạo embedding → lưu Qdrant → tìm nội dung liên quan qua HTTP API. PostgreSQL quản lý cây loại tài liệu và nhóm; Qdrant vẫn là nơi lưu chunk/vector.
 
 Service trả **ngữ cảnh và nguồn**, không tự tư vấn/chốt đơn. Bot vẫn giữ instruction, lịch sử hội thoại, điều phối và cách trả lời khách. Không cần Redis, không dùng MCP trong bản này.
 
@@ -8,9 +8,9 @@ Service trả **ngữ cảnh và nguồn**, không tự tư vấn/chốt đơn. 
 
 Hướng dẫn đầy đủ để cài source Python, cấu hình `.env`, tạo collection và kiểm tra kết nối Qdrant nằm tại [SETUP_QDRANT.md](SETUP_QDRANT.md).
 
-Nếu muốn đóng gói service bằng Docker Desktop hoặc Docker Compose, xem [DOCKER.md](DOCKER.md).
+Nếu muốn đóng gói service bằng Docker Desktop hoặc Docker Compose, xem [DOCKER.md](DOCKER.md). Cấu hình PostgreSQL và cách quản lý loại/nhóm nằm tại [POSTGRES_TAXONOMY.md](POSTGRES_TAXONOMY.md).
 
-Yêu cầu Python 3.11+, Qdrant đang chạy và Gemini API key.
+Yêu cầu Python 3.11+, PostgreSQL 16+, Qdrant đang chạy và Gemini API key.
 
 Trong CMD:
 
@@ -124,7 +124,7 @@ Mở `http://127.0.0.1:8001/` hoặc `/admin` để dùng giao diện quản lý
 ## Giao diện quản lý tài liệu
 
 1. Mở trang trực tiếp bằng `http://127.0.0.1:8000/admin` hoặc `http://localhost:8000/admin`: giao diện tự kết nối, không cần nhập key khi `RAG_LOCAL_ADMIN_ENABLED=true` (mặc định). Nếu truy cập từ máy khác hoặc đã tắt chế độ này, dùng `ADMIN_API_KEY` ở ô kết nối; key chỉ giữ trong bộ nhớ trang.
-2. Bấm **Thêm tài liệu**, chọn/kéo thả file TXT, MD hoặc PDF có lớp văn bản, điền tên và chọn nhóm. Có thể nhập mã nhóm khác. File TXT/MD cần UTF-8; giới hạn upload lấy từ cấu hình server (mặc định 10 MB).
+2. Bấm **Thêm tài liệu**, chọn/kéo thả file TXT, MD hoặc PDF có lớp văn bản, điền tên, chọn loại tài liệu rồi chọn nhóm con. Loại/nhóm mới được tạo bằng nút **Phân loại**. File TXT/MD cần UTF-8; giới hạn upload lấy từ cấu hình server (mặc định 10 MB).
 3. Bấm **Thêm tài liệu** và đợi xử lý embedding. Tài liệu thành công sẽ xuất hiện trên trang đầu của danh sách. Mỗi lần mở biểu mẫu tạo mã nguồn riêng, không ghi đè tài liệu cùng tên.
 4. Bấm **tên tài liệu** để mở hộp xem toàn bộ văn bản đã lưu (PDF hiển thị phần văn bản trích xuất). Bấm **Tải về** để lấy file đã lưu. Bấm **Xóa** trên tài liệu, kiểm tra tên trong hộp xác nhận rồi bấm **Xóa tài liệu**. Tài liệu, embedding và file local bị xóa vĩnh viễn.
 5. Dùng **Trước/Sau** để chuyển trang (20 tài liệu mỗi trang), **Làm mới** để cập nhật danh sách. Nút **Ngắt kết nối** chỉ hiện khi đăng nhập bằng key.
@@ -146,6 +146,10 @@ Swagger vẫn có tại `http://127.0.0.1:8001/docs` để thử API tìm kiếm
 
 Mở `/admin` trên localhost (tự kết nối) và bấm **Thử RAG**. Gemini tổng hợp câu trả lời
 từ kết quả tìm kiếm, kèm nhãn `[S1]`, `[S2]` đối chiếu với nguồn phía dưới.
+Trước khi hỏi, có thể chọn **Loại tài liệu** và **Nhóm tài liệu**. Phạm vi này được
+đổi thành category hợp lệ từ PostgreSQL rồi áp dụng cho cả BM25, vector Qdrant và
+mở rộng section; chỉ context trong phạm vi mới được gửi cho Gemini. Đổi phạm vi sẽ
+xóa lịch sử hội thoại hiện tại để nội dung của phạm vi cũ không ảnh hưởng câu hỏi mới.
 Mở **Xem nội dung truy xuất** để xem câu hỏi tìm kiếm và các đoạn được đưa vào model.
 Bạn có thể hỏi tiếp; lịch sử tối đa 6 lượt hoàn tất/24.000 ký tự được giữ trong bộ nhớ
 trang và gửi cùng câu hỏi. **Xóa hội thoại**, ngắt kết nối hoặc tải lại trang sẽ xóa lịch sử.
@@ -435,6 +439,9 @@ RAG_Service/
 │   ├── chunking.py      # Chia đoạn theo heading và độ dài
 │   ├── embeddings.py    # Gemini embedding
 │   ├── qdrant_repository.py # Lưu và tìm kiếm trên Qdrant
+│   ├── product_repository.py # Đọc và tìm kiếm catalog sản phẩm
+│   ├── product_sync/     # Shopify sync, inventory sync và CLIP worker
+│   ├── taxonomy_repository.py # Loại/nhóm tài liệu trong PostgreSQL
 │   └── service.py       # Import và truy xuất ngữ cảnh
 ├── examples/bot_client.py
 ├── tests/test_service.py

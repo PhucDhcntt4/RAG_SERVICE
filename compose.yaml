@@ -1,6 +1,23 @@
 name: donghai-rag-service
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-rag_service}
+      POSTGRES_USER: ${POSTGRES_USER:-rag_service}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Hãy cấu hình POSTGRES_PASSWORD trong .env}
+    volumes:
+      - rag_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+
   rag:
     build: .
     image: donghai-rag-service:local
@@ -10,6 +27,10 @@ services:
       - "127.0.0.1:${RAG_HTTP_PORT:-8000}:8000"
     environment:
       QDRANT_URL: http://host.docker.internal:6333
+      DATABASE_URL: postgresql://${POSTGRES_USER:-rag_service}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-rag_service}
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
       - type: bind
         source: ./.env
@@ -30,3 +51,41 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  product-worker:
+    build: .
+    image: donghai-rag-service:local
+    restart: unless-stopped
+    init: true
+    command: ["python", "-m", "app.product_sync.worker"]
+    environment:
+      QDRANT_URL: http://host.docker.internal:6333
+      DATABASE_URL: postgresql://${POSTGRES_USER:-rag_service}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-rag_service}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - type: bind
+        source: ./.env
+        target: /app/.env
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./storage
+        target: /app/storage
+    healthcheck:
+      disable: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  rag_postgres_data:

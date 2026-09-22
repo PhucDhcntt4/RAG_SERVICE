@@ -183,6 +183,17 @@ class KnowledgeService:
             self._refresh_bm25_after_write(row)
         return row
 
+    def set_classification(self, document_id, group):
+        row = self.repository.set_classification(
+            document_id,
+            category=group["code"],
+            doc_type_id=group["doc_type_id"],
+            group_id=group["id"],
+        )
+        if row is not None:
+            self._refresh_bm25_after_write(row)
+        return row
+
     def extract(self, filename: str, data: bytes) -> str:
         """Compatibility helper for callers that only need the document text."""
         return self.prepare_upload(filename, data)[0]

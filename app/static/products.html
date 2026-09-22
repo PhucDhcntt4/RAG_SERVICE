@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Kho sản phẩm · Đông Hải</title>
+
+    <link rel="stylesheet" href="/assets/admin.css?v=20260921-2" />
+    <link
+      rel="stylesheet"
+      href="/assets/products-sync.css?v=20260921-inventory1"
+    />
+    <link rel="stylesheet" href="/assets/products.css?v=20260921-search1" />
+
+    <script src="/assets/products.js?v=20260921-inventory1" defer></script>
+  </head>
+
+  <body>
+    <aside class="sidebar">
+      <a class="brand" href="/" aria-label="Đông Hải, trang chủ">
+        <span class="brand-mark">ĐH</span>
+
+        <span>
+          ĐÔNG HẢI
+          <small>TRUNG TÂM DỮ LIỆU</small>
+        </span>
+      </a>
+
+      <div class="nav-label">KHÔNG GIAN LÀM VIỆC</div>
+
+      <a class="nav-item" href="/">
+        <span aria-hidden="true"></span> Kho tài liệu
+      </a>
+      <a class="nav-item" href="/taxonomy"
+        ><span aria-hidden="true"></span> Loại và nhóm tài liệu</a
+      >
+      <a class="nav-item selected" href="/products" aria-current="page">
+        <span aria-hidden="true"></span>
+        Sản phẩm
+      </a>
+      <div class="sidebar-note">
+        <span class="note-symbol" aria-hidden="true">✦</span>
+
+        <strong>Product RAG</strong>
+
+        <p>
+          Theo dõi dữ liệu sản phẩm và trạng thái vector được sử dụng bởi trợ
+          lý.
+        </p>
+      </div>
+
+      <div class="sidebar-footer">
+        <span class="mini-mark">ĐH</span>
+        RAG Service
+        <span class="version">v1.0</span>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <span>
+          Không gian quản trị
+          <span class="slash">/</span>
+          <strong>Kho sản phẩm</strong>
+        </span>
+
+        <span class="connection" id="connection"> Chưa kết nối </span>
+      </header>
+
+      <div class="workspace">
+        <div class="page-heading">
+          <div>
+            <div class="eyebrow">PRODUCT RAG</div>
+
+            <h1>Kho sản phẩm</h1>
+
+            <p>Theo dõi dữ liệu sản phẩm và trạng thái vector trên Qdrant.</p>
+          </div>
+        </div>
+
+        <!-- Login khi local-admin không khả dụng -->
+        <section class="login-card" id="login-panel" hidden>
+          <div class="login-icon">⌘</div>
+
+          <div class="login-content">
+            <h2>Kết nối Product RAG</h2>
+
+            <p>Nhập ADMIN_API_KEY để xem dữ liệu sản phẩm.</p>
+
+            <form id="login-form">
+              <div class="key-field">
+                <input
+                  id="admin-key"
+                  type="password"
+                  placeholder="Nhập ADMIN_API_KEY"
+                  required
+                  autocomplete="off"
+                />
+
+                <button type="button" id="toggle-key" class="key-toggle">
+                  Hiện
+                </button>
+              </div>
+
+              <button class="primary" id="connect-button">Kết nối</button>
+            </form>
+
+            <p class="field-error" id="login-error"></p>
+          </div>
+        </section>
+
+        <div id="notice" class="notice" hidden></div>
+
+        <!-- Statistics -->
+        <section id="product-stats" class="product-stats" hidden>
+          <div class="product-stat">
+            <span>CATALOG</span>
+            <strong id="catalog-count">—</strong>
+            <small>Product vectors</small>
+          </div>
+
+          <div class="product-stat">
+            <span>HÌNH ẢNH</span>
+            <strong id="image-vector-count">—</strong>
+            <small>Image vectors</small>
+          </div>
+
+          <div class="product-stat">
+            <span>TRANG HIỆN TẠI</span>
+            <strong id="page-product-count">—</strong>
+            <small>Sản phẩm</small>
+          </div>
+
+          <div class="product-stat">
+            <span>AI READY</span>
+            <strong id="ready-count">—</strong>
+            <small>Sản phẩm AI có thể truy xuất</small>
+          </div>
+        </section>
+
+        <!-- Shopify / Qdrant sync -->
+        <section class="sync-panel" id="sync-panel" hidden>
+          <div class="sync-panel-heading">
+            <div>
+              <div class="eyebrow">SHOPIFY SYNC</div>
+              <h2>Đồng bộ Product RAG</h2>
+              <p>Worker Terminal 2 xử lý job nền và cập nhật Qdrant.</p>
+            </div>
+
+            <div class="sync-health">
+              <span class="sync-pill" id="worker-state">Worker: —</span>
+              <span class="sync-pill" id="write-state">Qdrant write: —</span>
+            </div>
+          </div>
+
+          <div class="sync-actions">
+            <button class="secondary" type="button" id="sync-existing">
+              Sync hiện có
+            </button>
+            <button class="primary" type="button" id="sync-all">
+              Sync tất cả ACTIVE
+            </button>
+            <button class="secondary" type="button" id="sync-refresh">
+              ↻ Trạng thái
+            </button>
+          </div>
+
+          <div class="sync-job-card">
+            <div class="sync-job-heading">
+              <div>
+                <strong id="sync-job-title">Chưa có sync job</strong>
+                <span id="sync-job-meta">—</span>
+              </div>
+              <span class="sync-status" id="sync-job-status">—</span>
+            </div>
+
+            <div class="sync-progress-track" aria-label="Tiến độ đồng bộ">
+              <div class="sync-progress-bar" id="sync-progress-bar"></div>
+            </div>
+
+            <div class="sync-metrics">
+              <div>
+                <span>TIẾN ĐỘ</span
+                ><strong id="sync-progress-text">0 / 0</strong>
+              </div>
+              <div><span>CREATE</span><strong id="sync-created">0</strong></div>
+              <div><span>UPDATE</span><strong id="sync-updated">0</strong></div>
+              <div>
+                <span>INACTIVE</span><strong id="sync-inactivated">0</strong>
+              </div>
+              <div>
+                <span>EMBED MỚI</span><strong id="sync-embeddings">0</strong>
+              </div>
+              <div><span>LỖI</span><strong id="sync-failed">0</strong></div>
+            </div>
+
+            <p class="sync-message" id="sync-job-message">
+              Worker chưa chạy job.
+            </p>
+          </div>
+
+          <div class="sync-config">
+            <div>
+              <h3>Auto Sync hằng ngày</h3>
+              <p>Lịch được worker kiểm tra và chỉ tạo một job cho mỗi ngày.</p>
+            </div>
+
+            <label class="sync-toggle-row">
+              <input type="checkbox" id="auto-sync-enabled" />
+              <span>Bật Auto Sync</span>
+            </label>
+
+            <label>
+              <span>Phạm vi</span>
+              <select id="auto-sync-mode">
+                <option value="existing">Sản phẩm hiện có</option>
+                <option value="all_active">Tất cả Shopify ACTIVE</option>
+              </select>
+            </label>
+
+            <label>
+              <span>Giờ chạy</span>
+              <input type="time" id="auto-sync-time" value="02:00" />
+            </label>
+
+            <label>
+              <span>Múi giờ</span>
+              <input
+                id="auto-sync-timezone"
+                value="Asia/Ho_Chi_Minh"
+                readonly
+              />
+            </label>
+
+            <button class="secondary" type="button" id="save-sync-settings">
+              Lưu lịch
+            </button>
+          </div>
+
+          <div class="sync-config inventory-sync-config">
+            <div>
+              <h3>Auto Sync tồn kho</h3>
+              <p>
+                Chỉ lấy inventory từ Shopify và cập nhật catalog Qdrant; không
+                chạy CLIP, không đụng vector ảnh.
+              </p>
+            </div>
+
+            <label class="sync-toggle-row">
+              <input type="checkbox" id="inventory-sync-enabled" />
+              <span>Bật Inventory Sync</span>
+            </label>
+
+            <label>
+              <span>Chu kỳ</span>
+              <select id="inventory-sync-interval">
+                <option value="1">1 giờ</option>
+                <option value="2">2 giờ</option>
+                <option value="3">3 giờ</option>
+                <option value="6">6 giờ</option>
+                <option value="12">12 giờ</option>
+                <option value="24">24 giờ</option>
+              </select>
+            </label>
+
+            <button
+              class="secondary"
+              type="button"
+              id="save-inventory-settings"
+            >
+              Lưu tồn kho
+            </button>
+            <button class="primary" type="button" id="inventory-sync-now">
+              Sync tồn kho ngay
+            </button>
+          </div>
+
+          <div class="inventory-sync-meta">
+            <span class="sync-pill" id="inventory-sync-state">Tồn kho: —</span>
+            <span id="inventory-sync-last">Lần cuối: —</span>
+            <span id="inventory-sync-next">Lần tiếp theo: —</span>
+            <span id="inventory-sync-stats">—</span>
+          </div>
+
+          <div class="sync-history-block">
+            <div class="product-section-heading">
+              <h3>Lịch sử gần đây</h3>
+            </div>
+            <div class="table-wrap sync-history-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>JOB</th>
+                    <th>TRIGGER</th>
+                    <th>MODE</th>
+                    <th>TRẠNG THÁI</th>
+                    <th>TIẾN ĐỘ</th>
+                    <th>LỖI</th>
+                    <th>THỜI GIAN</th>
+                  </tr>
+                </thead>
+                <tbody id="sync-history"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- Product table -->
+        <section class="library" id="product-panel" hidden>
+          <div class="library-header">
+            <div>
+              <h2>
+                Tất cả sản phẩm
+                <span class="count" id="product-count"> — </span>
+              </h2>
+
+              <p id="collection-info">Dữ liệu từ Qdrant</p>
+            </div>
+
+            <div class="toolbar">
+              <form
+                class="product-search"
+                id="product-search-form"
+                role="search"
+              >
+                <span aria-hidden="true">⌕</span>
+                <input
+                  id="product-search-input"
+                  type="search"
+                  maxlength="200"
+                  autocomplete="off"
+                  placeholder="Tìm tên, mã sản phẩm, handle, SKU…"
+                  aria-label="Tìm kiếm sản phẩm"
+                />
+                <button
+                  class="text-button product-search-clear"
+                  id="product-search-clear"
+                  type="button"
+                  hidden
+                >
+                  Xóa
+                </button>
+                <button class="secondary" type="submit">Tìm kiếm</button>
+              </form>
+
+              <button class="secondary" id="table-refresh">↻ Làm mới</button>
+
+              <button class="text-button" id="disconnect" hidden>
+                Ngắt kết nối
+              </button>
+            </div>
+          </div>
+
+          <div class="state" id="loading" hidden>
+            <span class="spinner"></span>
+
+            <h3>Đang tải sản phẩm…</h3>
+          </div>
+
+          <div class="state" id="empty" hidden>
+            <div class="empty-icon">◇</div>
+
+            <h3 id="empty-title">Chưa có sản phẩm</h3>
+
+            <p id="empty-description">
+              Không tìm thấy dữ liệu trong product catalog collection.
+            </p>
+          </div>
+
+          <div class="table-wrap" id="table-wrap" hidden>
+            <table class="product-table">
+              <thead>
+                <tr>
+                  <th>SẢN PHẨM</th>
+                  <th>MÃ SP</th>
+                  <th>LOẠI</th>
+                  <th>MÀU</th>
+                  <th>VECTOR ẢNH</th>
+                  <th>TRẠNG THÁI</th>
+                  <th>AI</th>
+                  <th>
+                    <span class="sr-only"> Thao tác </span>
+                  </th>
+                </tr>
+              </thead>
+
+              <tbody id="products"></tbody>
+            </table>
+          </div>
+
+          <footer class="pagination">
+            <span id="page-info"> Chưa tải danh sách </span>
+
+            <div>
+              <button class="secondary small" id="previous" disabled>
+                ← Trước
+              </button>
+
+              <button class="secondary small" id="next" disabled>Sau →</button>
+            </div>
+          </footer>
+        </section>
+
+        <p class="bottom-note">
+          Product Catalog
+          <span>·</span>
+          Image CLIP Vectors
+          <span>·</span>
+          Qdrant
+        </p>
+      </div>
+    </main>
+
+    <!-- Detail dialog -->
+    <dialog id="product-dialog" class="product-dialog">
+      <div class="dialog-heading">
+        <div>
+          <div class="eyebrow">PRODUCT DETAIL</div>
+
+          <h2 id="detail-title">Chi tiết sản phẩm</h2>
+
+          <p class="preview-meta" id="detail-meta"></p>
+        </div>
+
+        <button
+          type="button"
+          class="icon-button"
+          id="close-detail"
+          aria-label="Đóng"
+        >
+          ×
+        </button>
+      </div>
+
+      <div id="detail-loading" class="product-detail-loading" hidden>
+        <span class="spinner"></span>
+        Đang tải sản phẩm…
+      </div>
+
+      <div id="product-detail">
+        <section class="product-detail-overview">
+          <div class="product-main-image-wrap">
+            <img id="detail-image" class="product-main-image" alt="" hidden />
+
+            <div id="detail-no-image" class="product-no-image">◇</div>
+          </div>
+
+          <div class="product-info-grid">
+            <div>
+              <span>Mã sản phẩm</span>
+              <strong id="detail-code">—</strong>
+            </div>
+
+            <div>
+              <span>Thương hiệu</span>
+              <strong id="detail-vendor">—</strong>
+            </div>
+
+            <div>
+              <span>Loại sản phẩm</span>
+              <strong id="detail-type">—</strong>
+            </div>
+
+            <div>
+              <span>Chất liệu</span>
+              <strong id="detail-material">—</strong>
+            </div>
+
+            <div>
+              <span>Trạng thái</span>
+              <strong id="detail-status">—</strong>
+            </div>
+
+            <div>
+              <span>Cập nhật</span>
+              <strong id="detail-updated">—</strong>
+            </div>
+          </div>
+        </section>
+
+        <section class="product-detail-section">
+          <h3>Mô tả</h3>
+
+          <p id="detail-description" class="product-description">—</p>
+        </section>
+
+        <section class="product-detail-section">
+          <div class="product-section-heading">
+            <h3>Biến thể</h3>
+
+            <span class="count" id="variant-count"> 0 </span>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>SKU</th>
+                  <th>MÀU</th>
+                  <th>SIZE</th>
+                  <th>GIÁ</th>
+                  <th>TỒN KHO</th>
+                  <th>TRẠNG THÁI</th>
+                </tr>
+              </thead>
+
+              <tbody id="variants"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="product-detail-section">
+          <div class="product-section-heading">
+            <h3>Hình ảnh</h3>
+
+            <span class="count" id="image-count"> 0 </span>
+          </div>
+
+          <div class="product-gallery" id="product-gallery"></div>
+        </section>
+      </div>
+    </dialog>
+  </body>
+</html>

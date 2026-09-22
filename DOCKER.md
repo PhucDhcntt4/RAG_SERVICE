@@ -1,12 +1,12 @@
 # Hướng dẫn triển khai RAG Service bằng Docker trên Windows
 
-Gói này chạy API và giao diện trong Linux container; Qdrant chạy trên máy Windows và được container truy cập qua `host.docker.internal:6333`. Container đọc `.env` ở thư mục dự án. [Docker Desktop networking](https://docs.docker.com/desktop/features/networking/networking-how-tos/)
+Gói này chạy API, giao diện, Product Sync Worker và PostgreSQL trong Docker Compose; Qdrant chạy trên máy Windows và được container truy cập qua `host.docker.internal:6333`. PostgreSQL quản lý loại tài liệu/nhóm và trạng thái job, còn Qdrant lưu chunk/vector. Container đọc `.env` ở thư mục dự án. Xem thêm [POSTGRES_TAXONOMY.md](POSTGRES_TAXONOMY.md). [Docker Desktop networking](https://docs.docker.com/desktop/features/networking/networking-how-tos/)
 
 ## 1. Chuẩn bị
 
 - Mở Docker Desktop và dùng Linux containers.
 - Giữ Qdrant trên Windows hoạt động tại cổng `6333`.
-- Giữ `.env` đầy đủ `QDRANT_URL`, `QDRANT_COLLECTION`, `SEARCH_API_KEY`, `ADMIN_API_KEY`, `GEMINI_API_KEY`.
+- Giữ `.env` đầy đủ `QDRANT_URL`, `QDRANT_COLLECTION`, `SEARCH_API_KEY`, `ADMIN_API_KEY`, `GEMINI_API_KEY`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`.
 - Thư mục `knowlegde` chứa file gốc của tài liệu đã upload.
 - Nếu Uvicorn đang chạy trực tiếp ở cổng 8000, dừng bằng Ctrl+C trong cửa sổ chạy service trước khi bật container ở cùng cổng.
 
@@ -26,7 +26,7 @@ docker compose ps
 
 Sau đó mở `http://127.0.0.1:8000/`, nhập admin key như khi chạy Python. Swagger ở `/docs`.
 
-Khi hiển thị `healthy`, tiến trình API và kết nối Qdrant đã được kiểm tra; healthcheck không gọi Gemini. `up -d` chạy nền nên có thể đóng cửa sổ PowerShell. [Docker Compose up](https://docs.docker.com/reference/cli/docker/compose/up/)
+Khi hiển thị `healthy`, tiến trình API cùng kết nối PostgreSQL và Qdrant đã được kiểm tra; healthcheck không gọi Gemini. `up -d` chạy nền nên có thể đóng cửa sổ PowerShell. [Docker Compose up](https://docs.docker.com/reference/cli/docker/compose/up/)
 
 Kiểm tra readiness bằng search key mà không ghi key vào lịch sử lệnh:
 
@@ -47,6 +47,7 @@ Kết quả hợp lệ có `status=ready`, `vector_provider=qdrant`, tên collec
 | Khởi động lại | `docker compose restart` |
 | Xem trạng thái | `docker compose ps` |
 | Xem log trực tiếp | `docker compose logs -f --tail=100 rag` |
+| Xem log đồng bộ sản phẩm | `docker compose logs -f --tail=100 product-worker` |
 | Xóa container và network của dự án | `docker compose down` |
 
 Ctrl+C khi đang xem log chỉ dừng việc theo dõi log. Có thể dùng các nút Start/Stop của nhóm `donghai-rag-service` trong Docker Desktop.
@@ -57,10 +58,12 @@ Ctrl+C khi đang xem log chỉ dừng việc theo dõi log. Có thể dùng các
 
 - `.env` được mount chỉ đọc vào container; không nhúng vào image.
 - `knowlegde` được bind mount vào `/app/knowlegde`, nên file upload vẫn xuất hiện ngay trong thư mục Windows, giữ tên/đuôi như hiện tại.
+- `storage` được bind mount vào Product Sync Worker để ảnh sản phẩm đã tải không mất khi tạo lại container.
 - Qdrant ở ngoài container, nên `stop`, `down` hoặc build lại image không xóa collection Qdrant.
+- PostgreSQL dùng volume `rag_postgres_data`; `docker compose down` không xóa volume. Không thêm `-v` nếu chưa sao lưu loại tài liệu và nhóm.
 - `down` không xóa các file trong thư mục bind mount. Tuy nhiên, thao tác **Xóa tài liệu** trên giao diện vẫn xóa file tương ứng như trước. [Bind mounts](https://docs.docker.com/engine/storage/bind-mounts/)
 
-Khi sao lưu, giữ cả snapshot Qdrant, `knowlegde` và `.env` riêng tư. Image không chứa các dữ liệu này.
+Khi sao lưu, giữ cả PostgreSQL, snapshot Qdrant, `knowlegde` và `.env` riêng tư. Image không chứa các dữ liệu này.
 
 ## 5. Cập nhật
 

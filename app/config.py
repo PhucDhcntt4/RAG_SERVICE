@@ -2,8 +2,8 @@ import os
 from pathlib import Path
 from typing import Literal
 
-from dotenv import dotenv_values
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+from dotenv import dotenv_values # type: ignore
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator # type: ignore
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -14,6 +14,7 @@ class Settings(BaseModel):
     search_api_key: SecretStr
     admin_api_key: SecretStr
     gemini_api_key: SecretStr
+    database_url: SecretStr | None = None
     rag_embedding_model: Literal["gemini-embedding-001"] = "gemini-embedding-001"
     qdrant_url: str = Field(default="http://127.0.0.1:6333", min_length=1, max_length=500)
     qdrant_collection: str = Field(
@@ -48,6 +49,16 @@ class Settings(BaseModel):
     rag_chat_max_answer_chars: int = Field(default=12000, ge=1000, le=20000)
     rag_local_admin_enabled: bool = True
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    product_catalog_collection: str = Field(
+        default="bot_product_catalog_v1",
+        pattern=r"^[A-Za-z0-9._-]{1,255}$",
+    )
+
+    product_image_collection: str = Field(
+        default="bot_product_images_clip_v2",
+        pattern=r"^[A-Za-z0-9._-]{1,255}$",
+    )
+
 
     @model_validator(mode="after")
     def validate_settings(self):
