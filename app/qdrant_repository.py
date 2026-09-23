@@ -13,8 +13,17 @@ class QdrantRepository:
         self.base_url = settings.qdrant_url.rstrip("/")
         self.collection = settings.qdrant_collection
         self.dimension = 768
+
+        headers = {}
+        configured_key = getattr(settings, "qdrant_api_key", None)
+        if configured_key is not None:
+            api_key = configured_key.get_secret_value().strip()
+            if api_key:
+                headers["api-key"] = api_key
+
         self.client = httpx.Client(
             base_url=self.base_url,
+            headers=headers,
             timeout=settings.qdrant_timeout_seconds,
         )
 

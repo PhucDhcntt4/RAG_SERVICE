@@ -17,6 +17,7 @@ class Settings(BaseModel):
     database_url: SecretStr | None = None
     rag_embedding_model: Literal["gemini-embedding-001"] = "gemini-embedding-001"
     qdrant_url: str = Field(default="http://127.0.0.1:6333", min_length=1, max_length=500)
+    qdrant_api_key: SecretStr | None = None
     qdrant_collection: str = Field(
         default="rag_service_compare_v1",
         pattern=r"^[A-Za-z0-9._-]{1,255}$",

@@ -27,6 +27,7 @@ services:
       - "127.0.0.1:${RAG_HTTP_PORT:-8000}:8000"
     environment:
       QDRANT_URL: http://host.docker.internal:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
       DATABASE_URL: postgresql://${POSTGRES_USER:-rag_service}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-rag_service}
     depends_on:
       postgres:
@@ -60,6 +61,7 @@ services:
     command: ["python", "-m", "app.product_sync.worker"]
     environment:
       QDRANT_URL: http://host.docker.internal:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
       DATABASE_URL: postgresql://${POSTGRES_USER:-rag_service}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-rag_service}
     depends_on:
       postgres:

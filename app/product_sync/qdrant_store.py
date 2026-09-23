@@ -32,7 +32,18 @@ class ProductQdrantStore:
         self.base_url = settings.qdrant_url.rstrip("/")
         self.catalog_collection = settings.product_catalog_collection
         self.image_collection = settings.product_image_collection
-        self.client = httpx.Client(timeout=settings.qdrant_timeout_seconds)
+
+        headers = {}
+        configured_key = getattr(settings, "qdrant_api_key", None)
+        if configured_key is not None:
+            api_key = configured_key.get_secret_value().strip()
+            if api_key:
+                headers["api-key"] = api_key
+
+        self.client = httpx.Client(
+            headers=headers,
+            timeout=settings.qdrant_timeout_seconds,
+        )
 
     def close(self):
         self.client.close()
