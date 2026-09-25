@@ -607,21 +607,48 @@ def create_app(settings=None, service=None, chat=None, taxonomy=None):
     )
     def product_list(
         limit: int = Query(20, ge=1, le=100),
+        page: int | None = Query(None, ge=1),
         cursor: str | None = Query(None),
         q: str | None = Query(None, max_length=200),
+        product_type: str | None = Query(None, max_length=200),
+        status: str | None = Query(None, max_length=30),
         products=Depends(current_products),
     ):
-        result = products.list_products(
-            limit=limit,
-            cursor=cursor,
-            query=q,
-        )
+        if page is not None:
+            result = products.list_products_page(
+                page=page,
+                page_size=limit,
+                query=q,
+                product_type=product_type,
+                status=status,
+            )
+        else:
+            result = products.list_products(
+                limit=limit,
+                cursor=cursor,
+                query=q,
+                product_type=product_type,
+                status=status,
+            )
 
         return {
             **result,
             "limit": limit,
             "query": (q or "").strip(),
+            "product_type": (product_type or "").strip(),
+            "status": (status or "").strip().upper(),
         }
+
+
+    @application.get(
+        "/api/v1/products/filters",
+        dependencies=[Depends(admin)],
+        tags=["Products"],
+    )
+    def product_filters(
+        products=Depends(current_products),
+    ):
+        return products.list_filter_options()
 
 
     @application.get(

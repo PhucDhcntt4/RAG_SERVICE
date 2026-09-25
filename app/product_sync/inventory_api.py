@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.product_sync.execute_sync import write_enabled
@@ -32,6 +32,28 @@ def create_inventory_sync_router(admin_dependency):
     @router.get("/settings")
     def settings(repo: InventorySyncRepository = Depends(current_repo)):
         return repo.get_status()
+
+    @router.get("/history")
+    def history(
+        page: int = Query(1, ge=1),
+        page_size: int = Query(5, ge=1, le=100),
+        limit: int | None = Query(None, ge=1, le=100),
+        repo: InventorySyncRepository = Depends(current_repo),
+    ):
+        return repo.history_page(page=page, page_size=limit or page_size)
+
+    @router.get("/history/{run_id}/changes")
+    def history_changes(
+        run_id: int,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(10, ge=1, le=100),
+        repo: InventorySyncRepository = Depends(current_repo),
+    ):
+        return repo.changes_page(
+            run_id,
+            page=page,
+            page_size=page_size,
+        )
 
     @router.put("/settings")
     def update_settings(

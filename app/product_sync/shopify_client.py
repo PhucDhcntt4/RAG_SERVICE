@@ -104,6 +104,31 @@ query ProductSyncPage($first: Int!, $after: String, $query: String!) {
 """
 
 
+PRODUCT_KEYS_QUERY = """
+query ProductDeltaPage($first: Int!, $after: String, $query: String!) {
+  products(first: $first, after: $after, query: $query, sortKey: UPDATED_AT) {
+    nodes {
+      id
+      legacyResourceId
+      status
+      updatedAt
+
+      variants(first: 100) {
+        nodes {
+          sku
+        }
+      }
+    }
+
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+  }
+}
+"""
+
+
 INVENTORY_PRODUCTS_QUERY = """
 query InventorySyncPage($first: Int!, $after: String, $query: String!) {
   products(first: $first, after: $after, query: $query, sortKey: UPDATED_AT) {
@@ -111,6 +136,7 @@ query InventorySyncPage($first: Int!, $after: String, $query: String!) {
       id
       legacyResourceId
       status
+
       variants(first: 100) {
         nodes {
           id
@@ -125,6 +151,7 @@ query InventorySyncPage($first: Int!, $after: String, $query: String!) {
         }
       }
     }
+
     pageInfo {
       hasNextPage
       endCursor
@@ -132,6 +159,14 @@ query InventorySyncPage($first: Int!, $after: String, $query: String!) {
   }
 }
 """
+
+
+def escape_shopify_search(value: str) -> str:
+    return (
+        str(value or "")
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
+    )
 
 
 def variant_skus_from_shopify(product: dict) -> list[str]:
@@ -155,6 +190,21 @@ def product_code_from_shopify(product: dict) -> str | None:
     """
     skus = variant_skus_from_shopify(product)
     return skus[0] if skus else None
+
+
+def aggregate_shopify_status(products: list[dict]) -> str:
+    """Return the effective Shopify status for one grouped product code."""
+    statuses = {
+        str(product.get("status") or "").strip().upper()
+        for product in products
+        if str(product.get("status") or "").strip()
+    }
+
+    # A product code remains searchable while at least one Shopify source is ACTIVE.
+    for status in ("ACTIVE", "UNLISTED", "DRAFT", "ARCHIVED"):
+        if status in statuses:
+            return status
+    return "INACTIVE"
 
 
 class ShopifyClient:
@@ -230,16 +280,22 @@ class ShopifyClient:
 
         raise ShopifyError("Không thể gọi Shopify Admin API") from last_error
 
-    def iter_active_products(self, page_size: int = 50) -> Iterator[dict]:
+    def _iter_products(
+        self,
+        query: str,
+        *,
+        graphql_query: str = PRODUCTS_QUERY,
+        page_size: int = 50,
+    ) -> Iterator[dict]:
         after = None
 
         while True:
             data = self._graphql(
-                PRODUCTS_QUERY,
+                graphql_query,
                 {
                     "first": page_size,
                     "after": after,
-                    "query": "status:active",
+                    "query": query,
                 },
             )
 
@@ -259,32 +315,75 @@ class ShopifyClient:
                     "Shopify báo còn trang nhưng không trả endCursor"
                 )
 
-    def iter_active_inventory_products(self, page_size: int = 100) -> Iterator[dict]:
-        """Lightweight ACTIVE product scan for inventory only.
+    def iter_active_products(self, page_size: int = 50) -> Iterator[dict]:
+        yield from self._iter_products(
+            "status:active",
+            graphql_query=PRODUCTS_QUERY,
+            page_size=page_size,
+        )
 
-        Deliberately excludes title/description/media so the 6-hour inventory
-        scheduler never pays the cost of the full Product RAG query.
-        """
-        after = None
-        page_size = min(max(int(page_size), 1), 100)
+    def iter_active_inventory_products(
+        self,
+        page_size: int = 100,
+    ) -> Iterator[dict]:
+        """Load the minimal ACTIVE product fields needed by Inventory Sync."""
+        yield from self._iter_products(
+            "status:active",
+            graphql_query=INVENTORY_PRODUCTS_QUERY,
+            page_size=min(max(int(page_size), 1), 100),
+        )
 
-        while True:
-            data = self._graphql(
-                INVENTORY_PRODUCTS_QUERY,
-                {
-                    "first": page_size,
-                    "after": after,
-                    "query": "status:active",
-                },
-            )
-            connection = data.get("products") or {}
-            for product in connection.get("nodes") or []:
-                yield product
+    def iter_all_product_keys(self, page_size: int = 100) -> Iterator[dict]:
+        """Load only ID/status/updatedAt/SKU for Delta Sync bootstrap."""
+        yield from self._iter_products(
+            "",
+            graphql_query=PRODUCT_KEYS_QUERY,
+            page_size=page_size,
+        )
 
-            page_info = connection.get("pageInfo") or {}
-            if not page_info.get("hasNextPage"):
-                break
-            after = page_info.get("endCursor")
-            if not after:
-                raise ShopifyError("Shopify báo còn trang inventory nhưng không trả endCursor")
+    def iter_changed_products(
+        self,
+        updated_after: str,
+        updated_before: str,
+        page_size: int = 100,
+    ) -> Iterator[dict]:
+        """Load products changed in a time window, regardless of status."""
+        query = (
+            f"updated_at:>'{updated_after}' "
+            f"updated_at:<='{updated_before}'"
+        )
+        yield from self._iter_products(
+            query,
+            graphql_query=PRODUCT_KEYS_QUERY,
+            page_size=page_size,
+        )
 
+    def iter_products_by_sku(
+        self,
+        sku: str,
+        page_size: int = 50,
+    ) -> Iterator[dict]:
+        """Load full Shopify products for one SKU, regardless of status."""
+        escaped = escape_shopify_search(sku)
+        yield from self._iter_products(
+            f'sku:"{escaped}"',
+            graphql_query=PRODUCTS_QUERY,
+            page_size=page_size,
+        )
+
+
+def exact_products_for_code(
+    client: ShopifyClient,
+    product_code: str,
+) -> list[dict]:
+    """Return all Shopify sources whose first non-empty SKU is product_code."""
+    target = str(product_code or "").strip().casefold()
+    if not target:
+        return []
+
+    result = []
+    for product in client.iter_products_by_sku(product_code):
+        current = product_code_from_shopify(product)
+        if current and current.casefold() == target:
+            result.append(product)
+    return result

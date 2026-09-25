@@ -5,6 +5,7 @@ import argparse
 import psycopg
 
 from app.config import Settings
+from app.product_sync.delta_state_repository import ProductDeltaStateRepository
 from app.product_sync.inventory_repository import InventorySyncRepository
 from app.product_sync.repository import ProductSyncRepository
 from app.taxonomy_repository import TaxonomyRepository
@@ -13,8 +14,8 @@ from app.taxonomy_repository import TaxonomyRepository
 def main():
     parser = argparse.ArgumentParser(
         description=(
-            "Tạo bảng phân loại tài liệu, Product Sync và Inventory Sync "
-            "trong PostgreSQL"
+            "Tạo bảng phân loại tài liệu, Product Sync, Delta state "
+            "và Inventory Sync trong PostgreSQL"
         )
     )
     parser.add_argument(
@@ -35,11 +36,15 @@ def main():
         product_sync = ProductSyncRepository(settings)
         product_sync.initialize()
 
+        delta_state = ProductDeltaStateRepository(settings)
+        delta_state.initialize()
+
         inventory_sync = InventorySyncRepository(settings)
         inventory_sync.initialize()
+
     except (psycopg.Error, RuntimeError) as exc:
         raise SystemExit(
-            f"Không khởi tạo được PostgreSQL taxonomy ({type(exc).__name__}). "
+            f"Không khởi tạo được PostgreSQL metadata ({type(exc).__name__}). "
             "Kiểm tra DATABASE_URL, trạng thái PostgreSQL và quyền CREATE."
         ) from None
 
@@ -49,7 +54,7 @@ def main():
         f"{sum(len(doc_type['groups']) for doc_type in tree)} groups."
     )
     print("Qdrant vectors were not changed.")
-    print("Product sync and inventory sync metadata initialized.")
+    print("Product sync, Delta state and inventory sync metadata initialized.")
 
 
 if __name__ == "__main__":

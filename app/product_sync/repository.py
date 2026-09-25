@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import psycopg
+from psycopg.types.json import Jsonb
 from psycopg.rows import dict_row
 
 
@@ -130,6 +131,37 @@ class ProductSyncRepository:
                 INSERT INTO rag_metadata.product_sync_worker_state(id)
                 VALUES (1)
                 ON CONFLICT (id) DO NOTHING
+                """
+            )
+
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS rag_metadata.product_sync_changes (
+                    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                    job_id BIGINT NOT NULL REFERENCES rag_metadata.product_sync_jobs(id)
+                        ON DELETE CASCADE,
+                    product_code VARCHAR(100) NOT NULL,
+                    product_title TEXT NOT NULL DEFAULT '',
+                    change_type VARCHAR(30) NOT NULL
+                        CHECK (change_type IN (
+                            'CREATED', 'UPDATED', 'INACTIVATED', 'STATUS_CHANGED'
+                        )),
+                    changes JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE (job_id, product_code)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_product_sync_changes_job
+                ON rag_metadata.product_sync_changes(job_id, id DESC)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_product_sync_changes_code
+                ON rag_metadata.product_sync_changes(product_code)
                 """
             )
 
@@ -384,6 +416,110 @@ class ProductSyncRepository:
                 """,
                 (limit,),
             ).fetchall()
+
+    def history_page(self, page: int = 1, page_size: int = 5):
+        page = max(int(page), 1)
+        page_size = min(max(int(page_size), 1), 100)
+
+        with self.connection() as conn:
+            total_row = conn.execute(
+                "SELECT COUNT(*) AS total FROM rag_metadata.product_sync_jobs"
+            ).fetchone()
+            total = int(total_row["total"] if total_row else 0)
+            total_pages = max(1, (total + page_size - 1) // page_size)
+            page = min(page, total_pages)
+            rows = conn.execute(
+                """
+                SELECT j.*,
+                       (
+                           SELECT COUNT(*)
+                           FROM rag_metadata.product_sync_changes c
+                           WHERE c.job_id=j.id
+                       ) AS change_count
+                FROM rag_metadata.product_sync_jobs j
+                ORDER BY j.id DESC
+                LIMIT %s OFFSET %s
+                """,
+                (page_size, (page - 1) * page_size),
+            ).fetchall()
+
+        return {
+            "jobs": rows,
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": total_pages,
+        }
+
+    def save_product_change(self, job_id: int, change: dict):
+        with self.connection() as conn:
+            return conn.execute(
+                """
+                INSERT INTO rag_metadata.product_sync_changes (
+                    job_id,
+                    product_code,
+                    product_title,
+                    change_type,
+                    changes
+                )
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (job_id, product_code)
+                DO UPDATE SET
+                    product_title=EXCLUDED.product_title,
+                    change_type=EXCLUDED.change_type,
+                    changes=EXCLUDED.changes
+                RETURNING *
+                """,
+                (
+                    int(job_id),
+                    str(change.get("product_code") or "")[:100],
+                    str(change.get("product_title") or ""),
+                    str(change.get("change_type") or "UPDATED"),
+                    Jsonb(change.get("changes") or {}),
+                ),
+            ).fetchone()
+
+    def product_changes_page(
+        self,
+        job_id: int,
+        *,
+        page: int = 1,
+        page_size: int = 10,
+    ):
+        page = max(int(page), 1)
+        page_size = min(max(int(page_size), 1), 100)
+
+        with self.connection() as conn:
+            total_row = conn.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM rag_metadata.product_sync_changes
+                WHERE job_id=%s
+                """,
+                (int(job_id),),
+            ).fetchone()
+            total = int(total_row["total"] if total_row else 0)
+            total_pages = max(1, (total + page_size - 1) // page_size)
+            page = min(page, total_pages)
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM rag_metadata.product_sync_changes
+                WHERE job_id=%s
+                ORDER BY id DESC
+                LIMIT %s OFFSET %s
+                """,
+                (int(job_id), page_size, (page - 1) * page_size),
+            ).fetchall()
+
+        return {
+            "job_id": int(job_id),
+            "changes": rows,
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": total_pages,
+        }
 
     def maybe_enqueue_scheduled(
         self,

@@ -389,22 +389,26 @@ def build_catalog_payload(
     return payload, diff
 
 
-def inactive_payload(existing_payload: dict) -> dict:
+def inactive_payload(
+    existing_payload: dict,
+    status: str = "INACTIVE",
+) -> dict:
+    status = str(status or "INACTIVE").strip().upper() or "INACTIVE"
     payload = dict(existing_payload)
-    payload["status"] = "INACTIVE"
+    payload["status"] = status
 
     public_info = dict(payload.get("public_info") or {})
-    public_info["status"] = "INACTIVE"
+    public_info["status"] = status
     payload["public_info"] = public_info
 
     summary = dict(payload.get("summary") or {})
-    summary["status"] = "INACTIVE"
+    summary["status"] = status
     summary["ai_ready"] = False
     payload["summary"] = summary
 
     detail = dict(payload.get("detail") or {})
     detail_product = dict(detail.get("product") or {})
-    detail_product["status"] = "INACTIVE"
+    detail_product["status"] = status
     detail["product"] = detail_product
     payload["detail"] = detail
 

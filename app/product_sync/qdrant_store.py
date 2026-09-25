@@ -131,6 +131,74 @@ class ProductQdrantStore:
 
         return result
 
+    def catalog_by_code(self, product_code: str) -> dict | None:
+        body = {
+            "limit": 2,
+            "with_payload": True,
+            "with_vector": False,
+            "filter": {
+                "must": [
+                    {
+                        "key": "product_code",
+                        "match": {"value": product_code},
+                    }
+                ]
+            },
+        }
+        data = self._request(
+            "POST",
+            f"/collections/{self.catalog_collection}/points/scroll",
+            json=body,
+        ) or {}
+        points = data.get("points") or []
+        if not points:
+            return None
+        if len(points) > 1:
+            raise RuntimeError(
+                f"Catalog có nhiều point cùng product_code={product_code}"
+            )
+        point = points[0]
+        return {
+            "point_id": point.get("id"),
+            "payload": point.get("payload") or {},
+        }
+
+    def images_by_code(self, product_code: str) -> list[dict]:
+        result: list[dict] = []
+        offset = None
+        while True:
+            body = {
+                "limit": 256,
+                "with_payload": True,
+                "with_vector": False,
+                "filter": {
+                    "must": [
+                        {
+                            "key": "product_code",
+                            "match": {"value": product_code},
+                        }
+                    ]
+                },
+            }
+            if offset is not None:
+                body["offset"] = offset
+            data = self._request(
+                "POST",
+                f"/collections/{self.image_collection}/points/scroll",
+                json=body,
+            ) or {}
+            for point in data.get("points") or []:
+                result.append(
+                    {
+                        "point_id": point.get("id"),
+                        "payload": point.get("payload") or {},
+                    }
+                )
+            offset = data.get("next_page_offset")
+            if offset is None:
+                break
+        return result
+
     def all_images_by_code(self) -> dict[str, list[dict]]:
         result: dict[str, list[dict]] = defaultdict(list)
         offset = None

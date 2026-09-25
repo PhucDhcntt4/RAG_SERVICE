@@ -99,6 +99,88 @@
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+.product-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.product-filters .filter-select {
+  min-width: 170px;
+  max-width: 230px;
+  border: 1px solid #d6dfd9;
+  background: #fff;
+  color: #30483c;
+}
+.product-filter-clear {
+  white-space: nowrap;
+}
+
+/* Numbered product pagination */
+.pagination-summary,
+.pagination-controls,
+.pagination-pages {
+  display: flex;
+  align-items: center;
+}
+.pagination-summary {
+  gap: 10px;
+  color: #52675c;
+}
+.pagination-summary strong {
+  color: #16342a;
+  font-size: 12px;
+}
+.pagination-summary #page-info {
+  padding-left: 10px;
+  border-left: 1px solid var(--line);
+  color: var(--muted);
+}
+.pagination-controls {
+  gap: 7px;
+}
+.pagination-pages {
+  gap: 4px;
+}
+.pagination-page,
+.pagination-arrow {
+  min-width: 34px;
+  height: 34px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #4b6256;
+  font-size: 12px;
+  cursor: pointer;
+}
+.pagination-page:hover,
+.pagination-arrow:hover:not(:disabled) {
+  background: #f0f4f1;
+}
+.pagination-page.active {
+  background: #e9eef4;
+  color: #203d31;
+  font-weight: 700;
+}
+.pagination-arrow:disabled {
+  color: #c8d1cb;
+  cursor: default;
+}
+.pagination-ellipsis {
+  min-width: 28px;
+  text-align: center;
+  color: #91a097;
+}
+.pagination-size {
+  height: 38px;
+  margin-left: 10px;
+  padding: 0 34px 0 12px;
+  border: 1px solid #d6dfd9;
+  border-radius: 9px;
+  background: #fff;
+  color: #30483c;
+  font-size: 12px;
+}
 
 /* Product detail dialog */
 .product-dialog {
@@ -233,6 +315,30 @@
   .product-search {
     width: 100%;
     min-width: 0;
+  }
+  .product-filters {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .product-filters .filter-select {
+    flex: 1 1 150px;
+    max-width: none;
+  }
+  .pagination {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .pagination-summary {
+    flex-wrap: wrap;
+  }
+  .pagination-controls {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .pagination-pages {
+    flex: 1;
+    justify-content: center;
   }
   .product-detail-overview {
     flex-direction: column;

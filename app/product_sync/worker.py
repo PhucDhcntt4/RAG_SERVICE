@@ -10,12 +10,20 @@ from uuid import uuid4
 from dotenv import dotenv_values
 
 from app.config import ROOT, Settings
+from app.product_sync.delta_sync import run_delta
 from app.product_sync.execute_sync import SyncExecutor, load_groups, write_enabled
 from app.product_sync.repository import ProductSyncRepository
 from app.product_sync.inventory_repository import InventorySyncRepository
 from app.product_sync.inventory_sync import InventorySyncExecutor, write_report as write_inventory_report
+from app.product_sync.shopify_client import (
+    ShopifyClient,
+    ShopifyConfig,
+    aggregate_shopify_status,
+    exact_products_for_code,
+)
 
 logger = logging.getLogger("rag_service.product_sync.worker")
+SCHEDULED_DELTA_OVERLAP_SECONDS = 120
 
 
 def configure_logging(level):
@@ -54,6 +62,66 @@ def write_job_report(job_id: int, payload: dict):
     return path
 
 
+def run_delta_job(
+    job: dict,
+    settings,
+    jobs: ProductSyncRepository,
+    instance_id: str,
+):
+    job_id = int(job["id"])
+    apply = not bool(job["dry_run"])
+    jobs.update_progress(
+        job_id,
+        total_products=0,
+        selected_products=0,
+        processed_products=0,
+        skipped_products=0,
+        message="Delta Sync is scanning Shopify changes...",
+    )
+
+    result = run_delta(
+        settings,
+        apply=apply,
+        overlap_seconds=SCHEDULED_DELTA_OVERLAP_SECONDS,
+        progress=lambda: jobs.heartbeat(instance_id, job_id),
+        audit_callback=lambda change: jobs.save_product_change(job_id, change),
+    )
+
+    progress = {
+        "total_products": int(result["changed_products"]),
+        "selected_products": int(result["affected_products"]),
+        "processed_products": int(result["processed_products"]),
+        "skipped_products": int(result["skipped_products"]),
+        "created_products": int(result["created_products"]),
+        "updated_products": int(result["updated_products"]),
+        "inactivated_products": int(result["inactivated_products"]),
+        "new_embeddings": int(result["new_embeddings"]),
+        "removed_image_points": int(result["removed_image_points"]),
+    }
+    progress["message"] = (
+        "Delta Sync completed. "
+        f"changed={progress['total_products']}; "
+        f"affected_sku={progress['selected_products']}; "
+        f"created={progress['created_products']}; "
+        f"updated={progress['updated_products']}; "
+        f"inactivated={progress['inactivated_products']}; "
+        f"new_embeddings={progress['new_embeddings']}"
+    )
+    jobs.complete(job_id, **progress)
+    logger.info(
+        "Delta Sync completed job_id=%s trigger=%s changed=%s affected=%s "
+        "created=%s updated=%s inactivated=%s embeddings=%s",
+        job_id,
+        job["trigger_type"],
+        progress["total_products"],
+        progress["selected_products"],
+        progress["created_products"],
+        progress["updated_products"],
+        progress["inactivated_products"],
+        progress["new_embeddings"],
+    )
+
+
 def run_job(job: dict, settings, jobs: ProductSyncRepository, instance_id: str):
     job_id = int(job["id"])
     apply = not bool(job["dry_run"])
@@ -65,7 +133,14 @@ def run_job(job: dict, settings, jobs: ProductSyncRepository, instance_id: str):
         )
         return
 
+    # mode=existing is the incremental path for both scheduled jobs and the
+    # manual "Chạy Delta Sync ngay" action. all_active remains full reconcile.
+    if job["mode"] == "existing":
+        run_delta_job(job, settings, jobs, instance_id)
+        return
+
     executor = SyncExecutor(settings, apply=apply)
+    status_client = ShopifyClient(ShopifyConfig.load())
     failures: list[dict] = []
 
     stats = {
@@ -169,16 +244,23 @@ def run_job(job: dict, settings, jobs: ProductSyncRepository, instance_id: str):
                         else:
                             stats["created_products"] += 1
                 else:
+                    shopify_sources = exact_products_for_code(
+                        status_client,
+                        code,
+                    )
+                    shopify_status = aggregate_shopify_status(shopify_sources)
                     if apply:
 
                         old_payload = existing[code].get("payload") or {}
                         if (
-                            str(old_payload.get("status") or "").upper() == "INACTIVE"
+                            str(old_payload.get("status") or "").upper()
+                            == shopify_status
                             and not current_points
                         ):
                             result = {
                                 "product_code": code,
                                 "status": "already_inactive",
+                                "shopify_status": shopify_status,
                                 "removed_image_points": 0,
                                 "ai_ready": False,
                             }
@@ -187,6 +269,7 @@ def run_job(job: dict, settings, jobs: ProductSyncRepository, instance_id: str):
                                 code,
                                 existing[code],
                                 current_points,
+                                shopify_status=shopify_status,
                             )
                             stats["removed_image_points"] += int(
                                 result.get("removed_image_points") or 0
@@ -195,11 +278,18 @@ def run_job(job: dict, settings, jobs: ProductSyncRepository, instance_id: str):
                         result = {
                             "product_code": code,
                             "catalog_action": "INACTIVATE",
+                            "shopify_status": shopify_status,
                             "current_image_points": len(current_points),
                             "ai_ready_after": False,
                         }
 
                     stats["inactivated_products"] += 1
+
+                if apply and result.get("audit_change") is not None:
+                    jobs.save_product_change(
+                        job_id,
+                        result["audit_change"],
+                    )
 
                 logger.info(
                     "Sync product completed job_id=%s index=%s/%s code=%s kind=%s result=%s",
@@ -280,6 +370,7 @@ def run_job(job: dict, settings, jobs: ProductSyncRepository, instance_id: str):
         )
 
     finally:
+        status_client.close()
         executor.close()
 
 
@@ -288,21 +379,33 @@ def run_inventory_job(
     inventory: InventorySyncRepository,
     jobs: ProductSyncRepository,
     instance_id: str,
-    trigger_type: str,
+    inventory_claim: dict,
 ):
     if not write_enabled():
         return
 
-    logger.info("Inventory sync started trigger=%s", trigger_type)
+    run_id = int(inventory_claim["run_id"])
+    trigger_name = str(inventory_claim.get("trigger_type") or "scheduled")
+    logger.info(
+        "Inventory sync started run_id=%s trigger=%s",
+        run_id,
+        trigger_name,
+    )
     executor = InventorySyncExecutor(settings, apply=True)
     try:
         stats = executor.run(progress=lambda: jobs.heartbeat(instance_id, None))
+        change_details = stats.pop("_change_details", [])
+        inventory.save_changes(run_id, change_details)
         report_path = write_inventory_report(stats, apply=True)
-        inventory.complete(stats)
+        inventory.complete(
+            stats,
+            run_id=run_id,
+            report_path=str(report_path),
+        )
         logger.info(
             "Inventory sync completed trigger=%s checked_products=%s updated_products=%s "
             "checked_variants=%s changed_variants=%s missing_products=%s missing_variants=%s report=%s",
-            trigger_type,
+            trigger_name,
             stats["checked_products"],
             stats["updated_products"],
             stats["checked_variants"],
@@ -312,7 +415,10 @@ def run_inventory_job(
             report_path,
         )
     except Exception as exc:
-        inventory.fail(f"{type(exc).__name__}: {str(exc)[:1500]}")
+        inventory.fail(
+            f"{type(exc).__name__}: {str(exc)[:1500]}",
+            run_id=run_id,
+        )
         logger.exception("Inventory sync failed error_type=%s", type(exc).__name__)
     finally:
         executor.close()
@@ -328,7 +434,6 @@ def main():
 
     inventory = InventorySyncRepository(settings)
     inventory.initialize()
-    inventory.recover_interrupted()
 
     lock_connection = jobs.acquire_worker_lock()
     if lock_connection is None:
@@ -340,6 +445,7 @@ def main():
     instance_id = uuid4().hex
     poll_seconds = load_poll_seconds()
 
+    inventory.recover_interrupted()
     recovered = jobs.recover_interrupted_jobs()
     jobs.heartbeat(instance_id, None)
 
@@ -369,7 +475,7 @@ def main():
                                 inventory,
                                 jobs,
                                 instance_id,
-                                inventory_claim["trigger_type"],
+                                inventory_claim,
                             )
                             continue
                     time.sleep(poll_seconds)

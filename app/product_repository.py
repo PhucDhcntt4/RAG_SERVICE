@@ -45,9 +45,7 @@ class ProductRepository:
 
         return body.get("result")
 
-    # ---------------------------------------------------------
     # Cursor
-    # ---------------------------------------------------------
 
     @staticmethod
     def _encode_cursor(value):
@@ -79,9 +77,7 @@ class ProductRepository:
 
         return json.loads(raw.decode("utf-8"))
 
-    # ---------------------------------------------------------
     # Collections
-    # ---------------------------------------------------------
 
     def collection_status(self):
         catalog = self._request(
@@ -113,9 +109,7 @@ class ProductRepository:
             },
         }
 
-    # ---------------------------------------------------------
     # Products
-    # ---------------------------------------------------------
 
     @staticmethod
     def _product_summary(point):
@@ -218,6 +212,8 @@ class ProductRepository:
         limit: int = 20,
         cursor: str | None = None,
         query: str | None = None,
+        product_type: str | None = None,
+        status: str | None = None,
     ):
         cursor_value = self._decode_cursor(cursor)
         if isinstance(cursor_value, dict):
@@ -228,7 +224,25 @@ class ProductRepository:
             exclude_point_id = None
         products = []
         normalized_query = self._normalize_search_text(query)
+        selected_product_type = str(product_type or "").strip()
+        selected_status = str(status or "").strip().upper()
         next_page_offset = None
+
+        conditions = []
+        if selected_product_type:
+            conditions.append(
+                {
+                    "key": "product_type",
+                    "match": {"value": selected_product_type},
+                }
+            )
+        if selected_status:
+            conditions.append(
+                {
+                    "key": "status",
+                    "match": {"value": selected_status},
+                }
+            )
 
         while len(products) < limit:
             # Search scans larger batches. When a page fills in the middle of a
@@ -242,6 +256,8 @@ class ProductRepository:
 
             if offset is not None:
                 body["offset"] = offset
+            if conditions:
+                body["filter"] = {"must": conditions}
 
             result = self._request(
                 "POST",
@@ -301,6 +317,189 @@ class ProductRepository:
             "next_cursor": self._encode_cursor(
                 next_page_offset
             ),
+        }
+
+    def list_filter_options(self):
+        """Return exact catalog values used by the product table filters."""
+        product_types: set[str] = set()
+        statuses: set[str] = set()
+        offset = None
+
+        while True:
+            body = {
+                "limit": 256,
+                "with_payload": True,
+                "with_vector": False,
+            }
+            if offset is not None:
+                body["offset"] = offset
+
+            result = self._request(
+                "POST",
+                self._collection_path(self.catalog_collection) + "/points/scroll",
+                json=body,
+            )
+
+            for point in result.get("points", []):
+                payload = point.get("payload") or {}
+                summary = payload.get("summary") or {}
+                product_type = str(
+                    payload.get("product_type")
+                    or summary.get("product_type")
+                    or ""
+                ).strip()
+                status = str(
+                    payload.get("status")
+                    or summary.get("status")
+                    or ""
+                ).strip().upper()
+
+                if product_type:
+                    product_types.add(product_type)
+                if status:
+                    statuses.add(status)
+
+            offset = result.get("next_page_offset")
+            if offset is None:
+                break
+
+        return {
+            "product_types": sorted(product_types, key=str.casefold),
+            "statuses": sorted(statuses, key=str.casefold),
+        }
+
+    def list_products_page(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 30,
+        query: str | None = None,
+        product_type: str | None = None,
+        status: str | None = None,
+    ):
+        """Return numbered pagination while Qdrant remains cursor-based."""
+        requested_page = max(1, int(page))
+        page_size = max(1, int(page_size))
+        normalized_query = self._normalize_search_text(query)
+        selected_product_type = str(product_type or "").strip()
+        selected_status = str(status or "").strip().upper()
+
+        conditions = []
+        if selected_product_type:
+            conditions.append(
+                {
+                    "key": "product_type",
+                    "match": {"value": selected_product_type},
+                }
+            )
+        if selected_status:
+            conditions.append(
+                {
+                    "key": "status",
+                    "match": {"value": selected_status},
+                }
+            )
+
+        qdrant_filter = {"must": conditions} if conditions else None
+
+        # Text search is normalized in Python, so all filtered candidates must
+        # be inspected to calculate an exact total and arbitrary page number.
+        if normalized_query:
+            matched = []
+            offset = None
+
+            while True:
+                body = {
+                    "limit": 256,
+                    "with_payload": True,
+                    "with_vector": False,
+                }
+                if offset is not None:
+                    body["offset"] = offset
+                if qdrant_filter:
+                    body["filter"] = qdrant_filter
+
+                result = self._request(
+                    "POST",
+                    self._collection_path(self.catalog_collection)
+                    + "/points/scroll",
+                    json=body,
+                )
+
+                for point in result.get("points", []):
+                    payload = point.get("payload") or {}
+                    if not self._matches_search(payload, normalized_query):
+                        continue
+                    row = self._product_summary(point)
+                    if row["product_code"]:
+                        matched.append(row)
+
+                offset = result.get("next_page_offset")
+                if offset is None:
+                    break
+
+            total = len(matched)
+            total_pages = max(1, (total + page_size - 1) // page_size)
+            effective_page = min(requested_page, total_pages)
+            start = (effective_page - 1) * page_size
+            rows = matched[start : start + page_size]
+        else:
+            count_body = {"exact": True}
+            if qdrant_filter:
+                count_body["filter"] = qdrant_filter
+            count_result = self._request(
+                "POST",
+                self._collection_path(self.catalog_collection) + "/points/count",
+                json=count_body,
+            )
+            total = int((count_result or {}).get("count") or 0)
+            total_pages = max(1, (total + page_size - 1) // page_size)
+            effective_page = min(requested_page, total_pages)
+            skip = (effective_page - 1) * page_size
+            seen = 0
+            rows = []
+            offset = None
+
+            while len(rows) < page_size:
+                body = {
+                    "limit": 256,
+                    "with_payload": True,
+                    "with_vector": False,
+                }
+                if offset is not None:
+                    body["offset"] = offset
+                if qdrant_filter:
+                    body["filter"] = qdrant_filter
+
+                result = self._request(
+                    "POST",
+                    self._collection_path(self.catalog_collection)
+                    + "/points/scroll",
+                    json=body,
+                )
+                points = result.get("points", [])
+
+                for point in points:
+                    row = self._product_summary(point)
+                    if not row["product_code"]:
+                        continue
+                    if seen < skip:
+                        seen += 1
+                        continue
+                    rows.append(row)
+                    if len(rows) >= page_size:
+                        break
+
+                offset = result.get("next_page_offset")
+                if offset is None or not points:
+                    break
+
+        return {
+            "products": rows,
+            "page": effective_page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": total_pages,
         }
 
     def get_product(self, product_code: str):

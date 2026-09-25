@@ -9,11 +9,11 @@
     <link rel="stylesheet" href="/assets/admin.css?v=20260921-2" />
     <link
       rel="stylesheet"
-      href="/assets/products-sync.css?v=20260921-inventory1"
+      href="/assets/products-sync.css?v=20260924-checkpoint1"
     />
-    <link rel="stylesheet" href="/assets/products.css?v=20260921-search1" />
+    <link rel="stylesheet" href="/assets/products.css?v=20260924-pagination1" />
 
-    <script src="/assets/products.js?v=20260921-inventory1" defer></script>
+    <script src="/assets/products.js?v=20260924-checkpoint1" defer></script>
   </head>
 
   <body>
@@ -110,7 +110,13 @@
           </div>
         </section>
 
-        <div id="notice" class="notice" hidden></div>
+        <div
+          id="notice"
+          class="notice"
+          role="status"
+          aria-live="polite"
+          hidden
+        ></div>
 
         <!-- Statistics -->
         <section id="product-stats" class="product-stats" hidden>
@@ -143,7 +149,7 @@
         <section class="sync-panel" id="sync-panel" hidden>
           <div class="sync-panel-heading">
             <div>
-              <div class="eyebrow">SHOPIFY SYNC</div>
+              <div class="eyebrow">ĐỒNG BỘ SHOPIFY</div>
               <h2>Đồng bộ Product RAG</h2>
               <p>Worker Terminal 2 xử lý job nền và cập nhật Qdrant.</p>
             </div>
@@ -151,18 +157,34 @@
             <div class="sync-health">
               <span class="sync-pill" id="worker-state">Worker: —</span>
               <span class="sync-pill" id="write-state">Qdrant write: —</span>
+              <button
+                class="sync-panel-toggle"
+                id="sync-panel-toggle"
+                type="button"
+                aria-expanded="true"
+              >
+                <svg
+                  class="sync-panel-toggle-icon"
+                  aria-hidden="true"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                >
+                  <path d="M3.5 6 8 10.5 12.5 6" />
+                </svg>
+                <span id="sync-panel-toggle-text">Thu gọn</span>
+              </button>
             </div>
           </div>
 
           <div class="sync-actions">
             <button class="secondary" type="button" id="sync-existing">
-              Sync hiện có
+              Đồng bộ sản phẩm
             </button>
             <button class="primary" type="button" id="sync-all">
-              Sync tất cả ACTIVE
+              Đồng bộ tất cả sản phẩm ACTIVE
             </button>
             <button class="secondary" type="button" id="sync-refresh">
-              ↻ Trạng thái
+              ↻ Làm mới
             </button>
           </div>
 
@@ -202,19 +224,19 @@
 
           <div class="sync-config">
             <div>
-              <h3>Auto Sync hằng ngày</h3>
+              <h3>Đồng bộ sản phẩm hằng ngày</h3>
               <p>Lịch được worker kiểm tra và chỉ tạo một job cho mỗi ngày.</p>
             </div>
 
             <label class="sync-toggle-row">
               <input type="checkbox" id="auto-sync-enabled" />
-              <span>Bật Auto Sync</span>
+              <span>Bật đồng bộ tự động</span>
             </label>
 
             <label>
               <span>Phạm vi</span>
               <select id="auto-sync-mode">
-                <option value="existing">Sản phẩm hiện có</option>
+                <option value="existing">Đồng bộ sản phẩm</option>
                 <option value="all_active">Tất cả Shopify ACTIVE</option>
               </select>
             </label>
@@ -238,9 +260,70 @@
             </button>
           </div>
 
+          <div class="delta-checkpoint-card">
+            <div>
+              <span class="delta-checkpoint-label"
+                >CHECKPOINT( thời điểm điểm bộ )</span
+              >
+              <strong id="delta-checkpoint-time">Chưa tải checkpoint</strong>
+              <p id="delta-checkpoint-detail">—</p>
+            </div>
+            <button
+              class="secondary"
+              id="adjust-delta-checkpoint"
+              type="button"
+            >
+              Điều chỉnh checkpoint
+            </button>
+          </div>
+
+          <div class="sync-history-block">
+            <div class="product-section-heading">
+              <h3>Lịch sử đồng bộ sản phẩm</h3>
+            </div>
+            <div class="table-wrap sync-history-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>JOB</th>
+                    <th>TRIGGER</th>
+                    <th>MODE</th>
+                    <th>TRẠNG THÁI</th>
+                    <th>TIẾN ĐỘ</th>
+                    <th>LỖI</th>
+                    <th>THAY ĐỔI</th>
+                    <th>THỜI GIAN</th>
+                  </tr>
+                </thead>
+                <tbody id="sync-history"></tbody>
+              </table>
+            </div>
+            <div class="history-pagination">
+              <span id="sync-history-page-info">Trang 1 / 1 · 0 bản ghi</span>
+              <div>
+                <button
+                  class="pagination-arrow"
+                  id="sync-history-previous"
+                  type="button"
+                  aria-label="Trang lịch sử sản phẩm trước"
+                >
+                  ←
+                </button>
+                <button
+                  class="pagination-arrow"
+                  id="sync-history-next"
+                  type="button"
+                  aria-label="Trang lịch sử sản phẩm sau"
+                >
+                  →
+                </button>
+              </div>
+            </div>
+          </div>
+
           <div class="sync-config inventory-sync-config">
             <div>
-              <h3>Auto Sync tồn kho</h3>
+              <h3>Đồng bộ tồn kho</h3>
               <p>
                 Chỉ lấy inventory từ Shopify và cập nhật catalog Qdrant; không
                 chạy CLIP, không đụng vector ảnh.
@@ -249,7 +332,7 @@
 
             <label class="sync-toggle-row">
               <input type="checkbox" id="inventory-sync-enabled" />
-              <span>Bật Inventory Sync</span>
+              <span>Bật đồng bộ tự động</span>
             </label>
 
             <label>
@@ -269,7 +352,7 @@
               type="button"
               id="save-inventory-settings"
             >
-              Lưu tồn kho
+              Lưu lịch
             </button>
             <button class="primary" type="button" id="inventory-sync-now">
               Sync tồn kho ngay
@@ -283,9 +366,9 @@
             <span id="inventory-sync-stats">—</span>
           </div>
 
-          <div class="sync-history-block">
+          <div class="sync-history-block inventory-history-block">
             <div class="product-section-heading">
-              <h3>Lịch sử gần đây</h3>
+              <h3>Lịch sử đồng bộ tồn kho</h3>
             </div>
             <div class="table-wrap sync-history-wrap">
               <table>
@@ -293,15 +376,41 @@
                   <tr>
                     <th>JOB</th>
                     <th>TRIGGER</th>
-                    <th>MODE</th>
                     <th>TRẠNG THÁI</th>
-                    <th>TIẾN ĐỘ</th>
+                    <th>SẢN PHẨM</th>
+                    <th>BIẾN THỂ</th>
+                    <th>THAY ĐỔI</th>
+                    <th>THIẾU</th>
                     <th>LỖI</th>
+                    <th>CHI TIẾT</th>
                     <th>THỜI GIAN</th>
                   </tr>
                 </thead>
-                <tbody id="sync-history"></tbody>
+                <tbody id="inventory-sync-history"></tbody>
               </table>
+            </div>
+            <div class="history-pagination">
+              <span id="inventory-history-page-info"
+                >Trang 1 / 1 · 0 bản ghi</span
+              >
+              <div>
+                <button
+                  class="pagination-arrow"
+                  id="inventory-history-previous"
+                  type="button"
+                  aria-label="Trang lịch sử tồn kho trước"
+                >
+                  ←
+                </button>
+                <button
+                  class="pagination-arrow"
+                  id="inventory-history-next"
+                  type="button"
+                  aria-label="Trang lịch sử tồn kho sau"
+                >
+                  →
+                </button>
+              </div>
             </div>
           </div>
         </section>
@@ -319,6 +428,33 @@
             </div>
 
             <div class="toolbar">
+              <div class="product-filters" aria-label="Bộ lọc sản phẩm">
+                <select
+                  class="filter-select"
+                  id="product-type-filter"
+                  aria-label="Lọc theo thể loại"
+                >
+                  <option value="">Tất cả thể loại</option>
+                </select>
+
+                <select
+                  class="filter-select"
+                  id="product-status-filter"
+                  aria-label="Lọc theo trạng thái"
+                >
+                  <option value="">Tất cả trạng thái</option>
+                </select>
+
+                <button
+                  class="text-button product-filter-clear"
+                  id="product-filter-clear"
+                  type="button"
+                  hidden
+                >
+                  Xóa lọc
+                </button>
+              </div>
+
               <form
                 class="product-search"
                 id="product-search-form"
@@ -390,14 +526,46 @@
           </div>
 
           <footer class="pagination">
-            <span id="page-info"> Chưa tải danh sách </span>
+            <div class="pagination-summary">
+              Tổng sản phẩm:
+              <strong id="total-product-count">—</strong>
+              <span id="page-info">Chưa tải danh sách</span>
+            </div>
 
-            <div>
-              <button class="secondary small" id="previous" disabled>
-                ← Trước
+            <div class="pagination-controls">
+              <button
+                class="pagination-arrow"
+                id="previous"
+                type="button"
+                aria-label="Trang trước"
+                disabled
+              >
+                ←
               </button>
 
-              <button class="secondary small" id="next" disabled>Sau →</button>
+              <div class="pagination-pages" id="pagination-pages"></div>
+
+              <button
+                class="pagination-arrow"
+                id="next"
+                type="button"
+                aria-label="Trang sau"
+                disabled
+              >
+                →
+              </button>
+
+              <select
+                class="pagination-size"
+                id="page-size"
+                aria-label="Số sản phẩm mỗi trang"
+              >
+                <option value="10">10 / trang</option>
+                <option value="20">20 / trang</option>
+                <option value="30" selected>30 / trang</option>
+                <option value="50">50 / trang</option>
+                <option value="100">100 / trang</option>
+              </select>
             </div>
           </footer>
         </section>
@@ -411,6 +579,127 @@
         </p>
       </div>
     </main>
+
+    <!-- Delta checkpoint dialog -->
+    <dialog id="delta-checkpoint-dialog" class="delta-checkpoint-dialog">
+      <form id="delta-checkpoint-form">
+        <div class="sync-audit-heading">
+          <div>
+            <span class="eyebrow">PHỤC HỒI DELTA SYNC</span>
+            <h2>Điều chỉnh checkpoint</h2>
+            <p>
+              Delta sẽ đọc lại dữ liệu kể từ thời điểm này và tự lùi thêm 120
+              giây.
+            </p>
+          </div>
+          <button
+            class="dialog-close"
+            id="close-delta-checkpoint"
+            type="button"
+            aria-label="Đóng điều chỉnh checkpoint"
+          >
+            ×
+          </button>
+        </div>
+
+        <div class="delta-checkpoint-form-body">
+          <div class="checkpoint-warning">
+            Không đặt thời gian trong tương lai. Đặt lùi quá xa là an toàn hơn
+            nhưng Delta sẽ phải đọc nhiều dữ liệu hơn.
+          </div>
+
+          <label>
+            <span>Thời điểm bắt đầu đọc lại</span>
+            <input
+              id="delta-checkpoint-input"
+              type="datetime-local"
+              step="1"
+              required
+            />
+          </label>
+
+          <label>
+            <span>Múi giờ</span>
+            <input value="Asia/Ho_Chi_Minh (UTC+07:00)" readonly />
+          </label>
+
+          <div class="checkpoint-preview">
+            <span>Delta thực tế sẽ truy vấn từ</span>
+            <strong id="delta-checkpoint-query-preview">—</strong>
+          </div>
+
+          <label>
+            <span>Lý do điều chỉnh</span>
+            <textarea
+              id="delta-checkpoint-reason"
+              rows="3"
+              maxlength="1000"
+              placeholder="Ví dụ: Đọc lại từ thời điểm bắt đầu Full Sync"
+              required
+            ></textarea>
+          </label>
+
+          <label class="checkpoint-confirm-row">
+            <input id="delta-checkpoint-confirm" type="checkbox" required />
+            <span>
+              Tôi hiểu đặt checkpoint sai thời gian có thể làm bỏ sót dữ liệu.
+            </span>
+          </label>
+        </div>
+
+        <div class="checkpoint-dialog-actions">
+          <button class="secondary" id="cancel-delta-checkpoint" type="button">
+            Hủy
+          </button>
+          <button class="primary" id="save-delta-checkpoint" type="submit">
+            Lưu checkpoint
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- Sync audit dialog -->
+    <dialog id="sync-audit-dialog" class="sync-audit-dialog">
+      <div class="sync-audit-heading">
+        <div>
+          <span class="eyebrow" id="sync-audit-eyebrow">LỊCH SỬ THAY ĐỔI</span>
+          <h2 id="sync-audit-title">Chi tiết đồng bộ</h2>
+          <p id="sync-audit-summary">—</p>
+        </div>
+        <button
+          class="dialog-close"
+          id="close-sync-audit"
+          type="button"
+          aria-label="Đóng chi tiết thay đổi"
+        >
+          ×
+        </button>
+      </div>
+
+      <div class="sync-audit-list" id="sync-audit-list"></div>
+
+      <div class="history-pagination sync-audit-pagination">
+        <span id="sync-audit-page-info">Trang 1 / 1 · 0 thay đổi</span>
+        <div>
+          <button
+            class="pagination-arrow"
+            id="sync-audit-previous"
+            type="button"
+            aria-label="Trang chi tiết trước"
+          >
+            ←
+          </button>
+          <button
+            class="pagination-arrow"
+            id="sync-audit-next"
+            type="button"
+            aria-label="Trang chi tiết sau"
+          >
+            →
+          </button>
+        </div>
+      </div>
+    </dialog>
 
     <!-- Detail dialog -->
     <dialog id="product-dialog" class="product-dialog">

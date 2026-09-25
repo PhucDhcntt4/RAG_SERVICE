@@ -6,18 +6,33 @@
   let key = "";
   let localAdmin = false;
   let busy = false;
+  let noticeTimer = null;
   let syncPollTimer = null;
   let writeEnabled = false;
   let workerOnline = false;
   let lastJobId = null;
   let lastJobStatus = null;
   let inventorySyncRunning = false;
+  const historyPageSize = 5;
+  let syncHistoryPage = 1;
+  let syncHistoryTotalPages = 1;
+  let inventoryHistoryPage = 1;
+  let inventoryHistoryTotalPages = 1;
+  let deltaCheckpointState = null;
+  let auditKind = "product";
+  let auditRunId = null;
+  let auditPage = 1;
+  let auditTotalPages = 1;
+  const auditPageSize = 10;
+  const syncPanelCollapsedKey = "rag-product-sync-panel-collapsed";
 
-  let currentCursor = null;
-  let nextCursor = null;
+  let currentPage = 1;
+  let pageSize = 30;
+  let totalPages = 1;
+  let totalProducts = 0;
   let searchQuery = "";
-
-  const previousCursors = [];
+  let selectedProductType = "";
+  let selectedStatus = "";
 
   function formatNumber(value) {
     const number = Number(value);
@@ -52,6 +67,84 @@
     }
 
     return date.toLocaleString("vi-VN");
+  }
+
+  function formatVietnamDate(value) {
+    if (!value) return "—";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    return date.toLocaleString("vi-VN", {
+      timeZone: "Asia/Ho_Chi_Minh",
+    });
+  }
+
+  function vietnamDateTimeInput(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Ho_Chi_Minh",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23",
+      })
+        .formatToParts(date)
+        .filter((part) => part.type !== "literal")
+        .map((part) => [part.type, part.value]),
+    );
+    return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}`;
+  }
+
+  function checkpointInputIso() {
+    const value = $("delta-checkpoint-input").value;
+    return value ? `${value}+07:00` : "";
+  }
+
+  function updateCheckpointPreview() {
+    const value = checkpointInputIso();
+    const date = value ? new Date(value) : null;
+    if (!date || Number.isNaN(date.getTime())) {
+      $("delta-checkpoint-query-preview").textContent = "—";
+      return;
+    }
+    const overlap = Number(deltaCheckpointState?.overlap_seconds) || 120;
+    $("delta-checkpoint-query-preview").textContent = formatVietnamDate(
+      new Date(date.getTime() - overlap * 1000),
+    );
+  }
+
+  function setSyncPanelCollapsed(collapsed, persist = true) {
+    const panel = $("sync-panel");
+    const toggle = $("sync-panel-toggle");
+    const isCollapsed = Boolean(collapsed);
+
+    panel.classList.toggle("is-collapsed", isCollapsed);
+    toggle.setAttribute("aria-expanded", String(!isCollapsed));
+    $("sync-panel-toggle-text").textContent = isCollapsed
+      ? "Mở rộng"
+      : "Thu gọn";
+
+    if (persist) {
+      try {
+        window.localStorage.setItem(syncPanelCollapsedKey, String(isCollapsed));
+      } catch (_error) {
+        // Trình duyệt có thể chặn localStorage; thao tác đóng/mở vẫn hoạt động.
+      }
+    }
+  }
+
+  function restoreSyncPanelState() {
+    let collapsed = false;
+    try {
+      collapsed = window.localStorage.getItem(syncPanelCollapsedKey) === "true";
+    } catch (_error) {
+      collapsed = false;
+    }
+    setSyncPanelCollapsed(collapsed, false);
   }
 
   function element(tag, className = "", text) {
@@ -90,6 +183,11 @@
   function notice(message, error = false) {
     const box = $("notice");
 
+    if (noticeTimer) {
+      window.clearTimeout(noticeTimer);
+      noticeTimer = null;
+    }
+
     if (!message) {
       box.hidden = true;
       box.textContent = "";
@@ -99,6 +197,15 @@
     box.textContent = message;
     box.classList.toggle("error", error);
     box.hidden = false;
+
+    noticeTimer = window.setTimeout(
+      () => {
+        box.hidden = true;
+        box.textContent = "";
+        noticeTimer = null;
+      },
+      error ? 6500 : 4000,
+    );
   }
 
   function reset() {
@@ -106,14 +213,20 @@
     key = "";
     localAdmin = false;
 
-    currentCursor = null;
-    nextCursor = null;
+    currentPage = 1;
+    pageSize = 30;
+    totalPages = 1;
+    totalProducts = 0;
     searchQuery = "";
-
-    previousCursors.length = 0;
+    selectedProductType = "";
+    selectedStatus = "";
 
     $("product-search-input").value = "";
     $("product-search-clear").hidden = true;
+    $("product-type-filter").value = "";
+    $("product-status-filter").value = "";
+    $("product-filter-clear").hidden = true;
+    $("page-size").value = "30";
 
     $("products").replaceChildren();
     $("table-wrap").hidden = true;
@@ -123,6 +236,8 @@
     $("image-vector-count").textContent = "—";
     $("page-product-count").textContent = "—";
     $("ready-count").textContent = "—";
+    $("total-product-count").textContent = "—";
+    $("pagination-pages").replaceChildren();
 
     $("page-info").textContent = "Chưa tải danh sách";
 
@@ -193,6 +308,132 @@
 
     $("collection-info").textContent =
       `${catalog.name || "Catalog"} · ` + `${images.name || "Images"}`;
+  }
+
+  function replaceSelectOptions(select, values, emptyLabel, selectedValue) {
+    const empty = document.createElement("option");
+    empty.value = "";
+    empty.textContent = emptyLabel;
+    select.replaceChildren(empty);
+
+    for (const value of values) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = value;
+      select.append(option);
+    }
+
+    select.value = selectedValue;
+    if (select.value !== selectedValue) {
+      select.value = "";
+    }
+  }
+
+  function updateFilterClearButton() {
+    $("product-filter-clear").hidden = !(selectedProductType || selectedStatus);
+  }
+
+  async function loadProductFilters() {
+    const data = await api("/api/v1/products/filters");
+    const productTypes = Array.isArray(data.product_types)
+      ? data.product_types
+      : [];
+    const statuses = Array.isArray(data.statuses) ? data.statuses : [];
+
+    replaceSelectOptions(
+      $("product-type-filter"),
+      productTypes,
+      "Tất cả thể loại",
+      selectedProductType,
+    );
+    replaceSelectOptions(
+      $("product-status-filter"),
+      statuses,
+      "Tất cả trạng thái",
+      selectedStatus,
+    );
+    updateFilterClearButton();
+  }
+
+  function resetProductPagination() {
+    currentPage = 1;
+    totalPages = 1;
+  }
+
+  function paginationItems(page, pages) {
+    if (pages <= 7) {
+      return Array.from({ length: pages }, (_, index) => index + 1);
+    }
+
+    const selected = new Set([1, pages]);
+    let rangeStart;
+    let rangeEnd;
+
+    if (page <= 4) {
+      rangeStart = 2;
+      rangeEnd = 5;
+    } else if (page >= pages - 3) {
+      rangeStart = pages - 4;
+      rangeEnd = pages - 1;
+    } else {
+      rangeStart = page - 2;
+      rangeEnd = page + 2;
+    }
+
+    for (let value = rangeStart; value <= rangeEnd; value += 1) {
+      selected.add(value);
+    }
+
+    const ordered = [...selected].sort((left, right) => left - right);
+    const items = [];
+    let previous = 0;
+
+    for (const value of ordered) {
+      if (previous && value - previous > 1) {
+        items.push("ellipsis");
+      }
+      items.push(value);
+      previous = value;
+    }
+    return items;
+  }
+
+  function renderPagination() {
+    const container = $("pagination-pages");
+    container.replaceChildren();
+
+    if (totalProducts === 0) {
+      $("previous").disabled = true;
+      $("next").disabled = true;
+      return;
+    }
+
+    for (const item of paginationItems(currentPage, totalPages)) {
+      if (item === "ellipsis") {
+        container.append(element("span", "pagination-ellipsis", "…"));
+        continue;
+      }
+
+      const button = element(
+        "button",
+        item === currentPage ? "pagination-page active" : "pagination-page",
+        String(item),
+      );
+      button.type = "button";
+      button.setAttribute("aria-label", `Trang ${item}`);
+      if (item === currentPage) {
+        button.setAttribute("aria-current", "page");
+      }
+      button.addEventListener("click", async () => {
+        if (busy || item === currentPage) return;
+        currentPage = item;
+        await loadProducts();
+      });
+      container.append(button);
+    }
+
+    $("previous").disabled = currentPage <= 1;
+    $("next").disabled = currentPage >= totalPages;
   }
 
   function createProductImage(product) {
@@ -353,31 +594,40 @@
     try {
       const params = new URLSearchParams();
 
-      params.set("limit", "20");
-
-      if (currentCursor) {
-        params.set("cursor", currentCursor);
-      }
+      params.set("limit", String(pageSize));
+      params.set("page", String(currentPage));
 
       if (searchQuery) {
         params.set("q", searchQuery);
+      }
+
+      if (selectedProductType) {
+        params.set("product_type", selectedProductType);
+      }
+
+      if (selectedStatus) {
+        params.set("status", selectedStatus);
       }
 
       const data = await api(`/api/v1/products?${params.toString()}`);
 
       const products = Array.isArray(data.products) ? data.products : [];
 
-      nextCursor = data.next_cursor || null;
+      currentPage = Number(data.page) || 1;
+      totalPages = Math.max(1, Number(data.total_pages) || 1);
+      totalProducts = Math.max(0, Number(data.total) || 0);
 
       renderProducts(products);
 
       const readyCount = products.filter((item) => item.ai_ready).length;
 
-      $("product-count").textContent = String(products.length);
+      $("product-count").textContent = formatNumber(totalProducts);
 
       $("page-product-count").textContent = String(products.length);
 
       $("ready-count").textContent = String(readyCount);
+
+      $("total-product-count").textContent = formatNumber(totalProducts);
 
       $("page-info").textContent = searchQuery
         ? `${products.length} kết quả cho “${searchQuery}” trên trang`
@@ -390,13 +640,26 @@
         ? `Không có sản phẩm phù hợp với “${searchQuery}”.`
         : "Không tìm thấy dữ liệu trong product catalog collection.";
 
+      if (selectedProductType || selectedStatus) {
+        const filterLabels = [
+          selectedProductType && `thể loại ${selectedProductType}`,
+          selectedStatus && `trạng thái ${selectedStatus}`,
+        ].filter(Boolean);
+        const searchLabel = searchQuery ? ` · tìm “${searchQuery}”` : "";
+
+        $("page-info").textContent =
+          `${products.length} kết quả trên trang · ` +
+          `${filterLabels.join(" · ")}${searchLabel}`;
+        $("empty-title").textContent = "Không tìm thấy sản phẩm";
+        $("empty-description").textContent =
+          "Không có sản phẩm phù hợp với bộ lọc đã chọn.";
+      }
+
       $("table-wrap").hidden = products.length === 0;
 
       $("empty").hidden = products.length !== 0;
 
-      $("previous").disabled = previousCursors.length === 0;
-
-      $("next").disabled = !nextCursor;
+      renderPagination();
 
       setConnection(true);
     } finally {
@@ -589,8 +852,9 @@
     );
   }
 
-  function syncModeText(mode) {
-    return mode === "all_active" ? "Tất cả ACTIVE" : "Hiện có";
+  function syncModeText(mode, triggerType = "manual") {
+    if (mode === "all_active") return "Tất cả ACTIVE";
+    return "Đồng bộ thành công";
   }
 
   function updateSyncButtons(activeJob) {
@@ -625,7 +889,7 @@
         : 0;
 
     $("sync-job-title").textContent =
-      `Job #${job.id} · ${syncModeText(job.mode)}`;
+      `Job #${job.id} · ${syncModeText(job.mode, job.trigger_type)}`;
     $("sync-job-meta").textContent =
       `${job.trigger_type || "manual"} · ${job.dry_run ? "dry-run" : "ghi thật"} · ${formatDate(job.created_at)}`;
     $("sync-job-status").textContent = syncStatusText(job.status);
@@ -650,7 +914,7 @@
       const tr = document.createElement("tr");
       tr.append(createTextCell(`#${job.id}`));
       tr.append(createTextCell(job.trigger_type || "—"));
-      tr.append(createTextCell(syncModeText(job.mode)));
+      tr.append(createTextCell(syncModeText(job.mode, job.trigger_type)));
       tr.append(createTextCell(syncStatusText(job.status)));
       tr.append(
         createTextCell(
@@ -658,6 +922,22 @@
         ),
       );
       tr.append(createTextCell(String(job.failed_products || 0)));
+
+      const changeCell = document.createElement("td");
+      const changeCount = Number(job.change_count) || 0;
+      const changeButton = element(
+        "button",
+        "sync-audit-open",
+        changeCount ? `Xem ${formatNumber(changeCount)}` : "Không có",
+      );
+      changeButton.type = "button";
+      changeButton.disabled = changeCount === 0;
+      changeButton.addEventListener("click", () => {
+        openSyncAudit("product", job.id);
+      });
+      changeCell.append(changeButton);
+      tr.append(changeCell);
+
       tr.append(
         createTextCell(
           formatDate(job.finished_at || job.started_at || job.created_at),
@@ -669,10 +949,199 @@
     if (!jobs.length) {
       const tr = document.createElement("tr");
       const td = document.createElement("td");
-      td.colSpan = 7;
+      td.colSpan = 8;
       td.textContent = "Chưa có lịch sử sync.";
       tr.append(td);
       tbody.append(tr);
+    }
+  }
+
+  function renderHistoryPagination(kind, page, totalPages, total) {
+    const isInventory = kind === "inventory";
+    const info = $(
+      isInventory ? "inventory-history-page-info" : "sync-history-page-info",
+    );
+    const previous = $(
+      isInventory ? "inventory-history-previous" : "sync-history-previous",
+    );
+    const next = $(
+      isInventory ? "inventory-history-next" : "sync-history-next",
+    );
+
+    info.textContent =
+      `Trang ${formatNumber(page)} / ${formatNumber(totalPages)} · ` +
+      `${formatNumber(total)} bản ghi`;
+    previous.disabled = page <= 1;
+    next.disabled = page >= totalPages;
+  }
+
+  const auditFieldLabels = {
+    product: "Sản phẩm",
+    title: "Tên sản phẩm",
+    vendor: "Thương hiệu",
+    product_type: "Loại sản phẩm",
+    status: "Trạng thái",
+    description: "Mô tả",
+    material: "Chất liệu",
+    sole: "Đế",
+    height: "Chiều cao",
+    variants: "Biến thể",
+    images: "Hình ảnh",
+  };
+
+  function formatAuditValue(value) {
+    if (value === null || value === undefined || value === "") return "—";
+    if (typeof value === "boolean") return value ? "Có" : "Không";
+    if (typeof value === "object") {
+      return JSON.stringify(value, null, 2);
+    }
+    return String(value);
+  }
+
+  function renderProductAudit(rows) {
+    const list = $("sync-audit-list");
+    list.replaceChildren();
+
+    for (const row of rows) {
+      const card = element("article", "sync-audit-card");
+      const heading = element("div", "sync-audit-card-heading");
+      const identity = element("div");
+      identity.append(element("strong", "", row.product_code || "—"));
+      identity.append(
+        element("span", "", row.product_title || "Không có tên sản phẩm"),
+      );
+      heading.append(identity);
+      heading.append(
+        element("span", "sync-audit-type", row.change_type || "UPDATED"),
+      );
+      card.append(heading);
+
+      const fields = element("div", "sync-audit-fields");
+      for (const [field, values] of Object.entries(row.changes || {})) {
+        const item = element("div", "sync-audit-field");
+        item.append(element("strong", "", auditFieldLabels[field] || field));
+        const comparison = element("div", "sync-audit-comparison");
+        const before = element("div");
+        before.append(element("span", "", "Trước"));
+        before.append(element("pre", "", formatAuditValue(values?.before)));
+        const after = element("div");
+        after.append(element("span", "", "Sau"));
+        after.append(element("pre", "", formatAuditValue(values?.after)));
+        comparison.append(before, after);
+        item.append(comparison);
+        fields.append(item);
+      }
+      card.append(fields);
+      list.append(card);
+    }
+
+    if (!rows.length) {
+      list.append(
+        element(
+          "p",
+          "sync-audit-empty",
+          "Lần đồng bộ này không có dữ liệu thay đổi.",
+        ),
+      );
+    }
+  }
+
+  function renderInventoryAudit(rows) {
+    const list = $("sync-audit-list");
+    list.replaceChildren();
+
+    for (const row of rows) {
+      const card = element("article", "sync-audit-card inventory-audit-card");
+      const heading = element("div", "sync-audit-card-heading");
+      const identity = element("div");
+      identity.append(element("strong", "", row.product_code || "—"));
+      identity.append(
+        element("span", "", row.product_title || "Không có tên sản phẩm"),
+      );
+      heading.append(identity);
+      heading.append(
+        element(
+          "span",
+          "sync-audit-type",
+          row.variant_title || row.sku || "Variant",
+        ),
+      );
+      card.append(heading);
+
+      const comparison = element("div", "inventory-audit-values");
+      comparison.append(
+        element(
+          "div",
+          "",
+          `Tồn kho: ${formatAuditValue(row.before_quantity)} → ${formatAuditValue(row.after_quantity)}`,
+        ),
+      );
+      comparison.append(
+        element(
+          "div",
+          "",
+          `Có thể bán: ${formatAuditValue(row.before_available)} → ${formatAuditValue(row.after_available)}`,
+        ),
+      );
+      if (row.sku) comparison.append(element("div", "", `SKU: ${row.sku}`));
+      card.append(comparison);
+      list.append(card);
+    }
+
+    if (!rows.length) {
+      list.append(
+        element(
+          "p",
+          "sync-audit-empty",
+          "Lần đồng bộ này không có biến thể thay đổi.",
+        ),
+      );
+    }
+  }
+
+  async function loadSyncAudit() {
+    if (!auditRunId) return;
+    const prefix =
+      auditKind === "inventory"
+        ? "/api/v1/products/inventory-sync/history"
+        : "/api/v1/products/sync/history";
+    const data = await api(
+      `${prefix}/${auditRunId}/changes?page=${auditPage}&page_size=${auditPageSize}`,
+    );
+    auditPage = Number(data.page) || 1;
+    auditTotalPages = Math.max(1, Number(data.total_pages) || 1);
+    const rows = Array.isArray(data.changes) ? data.changes : [];
+
+    if (auditKind === "inventory") renderInventoryAudit(rows);
+    else renderProductAudit(rows);
+
+    $("sync-audit-summary").textContent =
+      `${formatNumber(data.total || 0)} thay đổi được lưu trong PostgreSQL.`;
+    $("sync-audit-page-info").textContent =
+      `Trang ${formatNumber(auditPage)} / ${formatNumber(auditTotalPages)} · ` +
+      `${formatNumber(data.total || 0)} thay đổi`;
+    $("sync-audit-previous").disabled = auditPage <= 1;
+    $("sync-audit-next").disabled = auditPage >= auditTotalPages;
+  }
+
+  async function openSyncAudit(kind, runId) {
+    auditKind = kind;
+    auditRunId = Number(runId);
+    auditPage = 1;
+    $("sync-audit-title").textContent =
+      kind === "inventory"
+        ? `Chi tiết đồng bộ tồn kho #${runId}`
+        : `Chi tiết đồng bộ sản phẩm #${runId}`;
+    $("sync-audit-list").replaceChildren(
+      element("p", "sync-audit-empty", "Đang tải thay đổi…"),
+    );
+    $("sync-audit-dialog").showModal();
+    try {
+      await loadSyncAudit();
+    } catch (error) {
+      $("sync-audit-list").replaceChildren(
+        element("p", "sync-audit-empty error", error.message),
+      );
     }
   }
 
@@ -723,11 +1192,96 @@
     $("auto-sync-timezone").value = data.timezone || "Asia/Ho_Chi_Minh";
   }
 
-  async function loadSyncHistory() {
-    const data = await api("/api/v1/products/sync/history?limit=8");
-    renderSyncHistory(Array.isArray(data.jobs) ? data.jobs : []);
+  async function loadDeltaCheckpoint() {
+    try {
+      const data = await api("/api/v1/products/sync/checkpoint");
+      deltaCheckpointState = data;
+      $("delta-checkpoint-time").textContent = formatVietnamDate(
+        data.last_success_at,
+      );
+      const detail = [
+        `Đọc thực tế từ ${formatVietnamDate(data.query_start_at)}`,
+        `${formatNumber(data.mapped_products || 0)} Shopify ID đã ánh xạ`,
+      ];
+      if (data.latest_adjustment?.reason) {
+        detail.push(`Lần chỉnh gần nhất: ${data.latest_adjustment.reason}`);
+      }
+      $("delta-checkpoint-detail").textContent = detail.join(" · ");
+      $("adjust-delta-checkpoint").disabled = false;
+    } catch (error) {
+      deltaCheckpointState = null;
+      $("delta-checkpoint-time").textContent = "Delta chưa bootstrap";
+      $("delta-checkpoint-detail").textContent = error.message;
+      $("adjust-delta-checkpoint").disabled = true;
+    }
   }
 
+  function openDeltaCheckpointDialog() {
+    if (!deltaCheckpointState?.last_success_at) return;
+    $("delta-checkpoint-input").value = vietnamDateTimeInput(
+      deltaCheckpointState.last_success_at,
+    );
+    $("delta-checkpoint-input").max = vietnamDateTimeInput(new Date());
+    $("delta-checkpoint-reason").value = "";
+    $("delta-checkpoint-confirm").checked = false;
+    updateCheckpointPreview();
+    $("delta-checkpoint-dialog").showModal();
+  }
+
+  async function saveDeltaCheckpoint(event) {
+    event.preventDefault();
+    const button = $("save-delta-checkpoint");
+    const lastSuccessAt = checkpointInputIso();
+    const reason = $("delta-checkpoint-reason").value.trim();
+    const confirmed = $("delta-checkpoint-confirm").checked;
+
+    if (!lastSuccessAt || !reason || !confirmed) {
+      notice("Vui lòng nhập thời gian, lý do và xác nhận rủi ro.", true);
+      return;
+    }
+
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = "Đang lưu…";
+    try {
+      const data = await api("/api/v1/products/sync/checkpoint", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          last_success_at: lastSuccessAt,
+          reason,
+          confirmed,
+        }),
+      });
+      deltaCheckpointState = data;
+      $("delta-checkpoint-dialog").close();
+      await loadDeltaCheckpoint();
+      notice(
+        `Đã đặt Delta checkpoint về ${formatVietnamDate(data.last_success_at)}. ` +
+          "Hãy chạy Delta Sync ngay để đọc lại dữ liệu.",
+      );
+    } catch (error) {
+      notice(error.message, true);
+    } finally {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  }
+
+  async function loadSyncHistory() {
+    const data = await api(
+      `/api/v1/products/sync/history?page=${syncHistoryPage}&page_size=${historyPageSize}`,
+    );
+    syncHistoryPage = Number(data.page) || 1;
+    syncHistoryTotalPages = Math.max(1, Number(data.total_pages) || 1);
+    renderSyncHistory(Array.isArray(data.jobs) ? data.jobs : []);
+    renderHistoryPagination(
+      "product",
+      syncHistoryPage,
+      syncHistoryTotalPages,
+      Number(data.total) || 0,
+    );
+  }
 
   async function loadInventorySyncStatus() {
     const data = await api("/api/v1/products/inventory-sync/status");
@@ -766,7 +1320,86 @@
       inventorySyncRunning || !Boolean(data.write_enabled);
   }
 
+  function renderInventorySyncHistory(runs) {
+    const tbody = $("inventory-sync-history");
+    tbody.replaceChildren();
+
+    for (const run of runs) {
+      const tr = document.createElement("tr");
+      tr.append(createTextCell(`#${run.id}`));
+      tr.append(createTextCell(run.trigger_type || "—"));
+      tr.append(createTextCell(syncStatusText(run.status)));
+      tr.append(createTextCell(formatNumber(run.checked_products || 0)));
+      tr.append(createTextCell(formatNumber(run.checked_variants || 0)));
+      tr.append(
+        createTextCell(
+          `${formatNumber(run.updated_products || 0)} SP · ` +
+            `${formatNumber(run.changed_variants || 0)} variant`,
+        ),
+      );
+      tr.append(
+        createTextCell(
+          `${formatNumber(run.missing_products || 0)} SP · ` +
+            `${formatNumber(run.missing_variants || 0)} variant`,
+        ),
+      );
+
+      const errorCell = createTextCell(run.error_message || "0");
+      if (run.error_message) {
+        errorCell.className = "inventory-history-error";
+        errorCell.title = run.error_message;
+      }
+      tr.append(errorCell);
+
+      const detailCell = document.createElement("td");
+      const changeCount = Number(run.change_count) || 0;
+      const detailButton = element(
+        "button",
+        "sync-audit-open",
+        changeCount ? `Xem ${formatNumber(changeCount)}` : "Không có",
+      );
+      detailButton.type = "button";
+      detailButton.disabled = changeCount === 0;
+      detailButton.addEventListener("click", () => {
+        openSyncAudit("inventory", run.id);
+      });
+      detailCell.append(detailButton);
+      tr.append(detailCell);
+
+      tr.append(createTextCell(formatDate(run.finished_at || run.started_at)));
+      tbody.append(tr);
+    }
+
+    if (!runs.length) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 10;
+      td.textContent = "Chưa có lịch sử đồng bộ tồn kho.";
+      tr.append(td);
+      tbody.append(tr);
+    }
+  }
+
+  async function loadInventorySyncHistory() {
+    const data = await api(
+      `/api/v1/products/inventory-sync/history?page=${inventoryHistoryPage}&page_size=${historyPageSize}`,
+    );
+    inventoryHistoryPage = Number(data.page) || 1;
+    inventoryHistoryTotalPages = Math.max(1, Number(data.total_pages) || 1);
+    renderInventorySyncHistory(Array.isArray(data.runs) ? data.runs : []);
+    renderHistoryPagination(
+      "inventory",
+      inventoryHistoryPage,
+      inventoryHistoryTotalPages,
+      Number(data.total) || 0,
+    );
+  }
+
   async function saveInventorySyncSettings() {
+    const button = $("save-inventory-settings");
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = "Đang lưu…";
     try {
       const body = {
         enabled: $("inventory-sync-enabled").checked,
@@ -777,17 +1410,26 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      notice("Đã lưu lịch Inventory Sync.");
+      notice(
+        body.enabled
+          ? `Đã lưu lịch đồng bộ tồn kho: chạy mỗi ${body.interval_hours} giờ.`
+          : "Đã lưu lịch đồng bộ tồn kho: tự động đang tắt.",
+      );
       await loadInventorySyncStatus();
     } catch (error) {
       notice(error.message, true);
+    } finally {
+      button.disabled = false;
+      button.textContent = originalText;
     }
   }
 
   async function runInventorySyncNow() {
     try {
       await api("/api/v1/products/inventory-sync/run", { method: "POST" });
-      notice("Đã yêu cầu đồng bộ tồn kho. Worker sẽ chạy sau job Product Sync hiện tại nếu có.");
+      notice(
+        "Đã yêu cầu đồng bộ tồn kho. Worker sẽ chạy sau job Product Sync hiện tại nếu có.",
+      );
       await loadInventorySyncStatus();
     } catch (error) {
       notice(error.message, true);
@@ -795,7 +1437,13 @@
   }
 
   async function refreshSyncArea() {
-    await Promise.all([loadSyncStatus(), loadSyncHistory(), loadInventorySyncStatus()]);
+    await Promise.all([
+      loadSyncStatus(),
+      loadSyncHistory(),
+      loadDeltaCheckpoint(),
+      loadInventorySyncStatus(),
+      loadInventorySyncHistory(),
+    ]);
   }
 
   function startSyncPolling() {
@@ -834,6 +1482,10 @@
   }
 
   async function saveSyncSettings() {
+    const button = $("save-sync-settings");
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = "Đang lưu…";
     try {
       const body = {
         enabled: $("auto-sync-enabled").checked,
@@ -847,10 +1499,17 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      notice("Đã lưu lịch Auto Sync.");
+      notice(
+        body.enabled
+          ? `Đã lưu lịch đồng bộ lúc ${body.sync_time}.`
+          : "Đã lưu lịch đồng bộ: tự động đang tắt.",
+      );
       await loadSyncSettings();
     } catch (error) {
       notice(error.message, true);
+    } finally {
+      button.disabled = false;
+      button.textContent = originalText;
     }
   }
 
@@ -859,11 +1518,14 @@
 
     await Promise.all([
       loadCollections(),
+      loadProductFilters(),
       loadProducts(),
       loadSyncSettings(),
       loadSyncStatus(),
       loadSyncHistory(),
+      loadDeltaCheckpoint(),
       loadInventorySyncStatus(),
+      loadInventorySyncHistory(),
     ]);
   }
 
@@ -927,9 +1589,7 @@
     event.preventDefault();
 
     searchQuery = $("product-search-input").value.trim();
-    currentCursor = null;
-    nextCursor = null;
-    previousCursors.length = 0;
+    resetProductPagination();
     $("product-search-clear").hidden = !searchQuery;
 
     await loadProducts();
@@ -938,40 +1598,125 @@
   $("product-search-clear").addEventListener("click", async () => {
     $("product-search-input").value = "";
     searchQuery = "";
-    currentCursor = null;
-    nextCursor = null;
-    previousCursors.length = 0;
+    resetProductPagination();
     $("product-search-clear").hidden = true;
 
     await loadProducts();
     $("product-search-input").focus();
   });
 
+  async function applyProductFilters() {
+    selectedProductType = $("product-type-filter").value;
+    selectedStatus = $("product-status-filter").value;
+    resetProductPagination();
+    updateFilterClearButton();
+    await loadProducts();
+  }
+
+  $("product-type-filter").addEventListener("change", applyProductFilters);
+  $("product-status-filter").addEventListener("change", applyProductFilters);
+  $("product-filter-clear").addEventListener("click", async () => {
+    selectedProductType = "";
+    selectedStatus = "";
+    $("product-type-filter").value = "";
+    $("product-status-filter").value = "";
+    resetProductPagination();
+    updateFilterClearButton();
+    await loadProducts();
+  });
+
   $("sync-existing").addEventListener("click", () => enqueueSync("existing"));
   $("sync-all").addEventListener("click", () => enqueueSync("all_active"));
   $("sync-refresh").addEventListener("click", refreshSyncArea);
   $("save-sync-settings").addEventListener("click", saveSyncSettings);
+  $("adjust-delta-checkpoint").addEventListener(
+    "click",
+    openDeltaCheckpointDialog,
+  );
+  $("delta-checkpoint-input").addEventListener(
+    "input",
+    updateCheckpointPreview,
+  );
+  $("delta-checkpoint-form").addEventListener(
+    "submit",
+    saveDeltaCheckpoint,
+  );
+  $("close-delta-checkpoint").addEventListener("click", () => {
+    $("delta-checkpoint-dialog").close();
+  });
+  $("cancel-delta-checkpoint").addEventListener("click", () => {
+    $("delta-checkpoint-dialog").close();
+  });
+  $("delta-checkpoint-dialog").addEventListener("click", (event) => {
+    if (event.target === $("delta-checkpoint-dialog")) {
+      $("delta-checkpoint-dialog").close();
+    }
+  });
+  $("sync-panel-toggle").addEventListener("click", () => {
+    setSyncPanelCollapsed(!$("sync-panel").classList.contains("is-collapsed"));
+  });
 
-  $("save-inventory-settings").addEventListener("click", saveInventorySyncSettings);
+  $("save-inventory-settings").addEventListener(
+    "click",
+    saveInventorySyncSettings,
+  );
   $("inventory-sync-now").addEventListener("click", runInventorySyncNow);
 
+  $("sync-history-previous").addEventListener("click", async () => {
+    if (syncHistoryPage <= 1) return;
+    syncHistoryPage -= 1;
+    await loadSyncHistory();
+  });
+  $("sync-history-next").addEventListener("click", async () => {
+    if (syncHistoryPage >= syncHistoryTotalPages) return;
+    syncHistoryPage += 1;
+    await loadSyncHistory();
+  });
+  $("inventory-history-previous").addEventListener("click", async () => {
+    if (inventoryHistoryPage <= 1) return;
+    inventoryHistoryPage -= 1;
+    await loadInventorySyncHistory();
+  });
+  $("inventory-history-next").addEventListener("click", async () => {
+    if (inventoryHistoryPage >= inventoryHistoryTotalPages) return;
+    inventoryHistoryPage += 1;
+    await loadInventorySyncHistory();
+  });
+
+  $("close-sync-audit").addEventListener("click", () => {
+    $("sync-audit-dialog").close();
+  });
+  $("sync-audit-previous").addEventListener("click", async () => {
+    if (auditPage <= 1) return;
+    auditPage -= 1;
+    await loadSyncAudit();
+  });
+  $("sync-audit-next").addEventListener("click", async () => {
+    if (auditPage >= auditTotalPages) return;
+    auditPage += 1;
+    await loadSyncAudit();
+  });
+  $("sync-audit-dialog").addEventListener("click", (event) => {
+    if (event.target === $("sync-audit-dialog")) {
+      $("sync-audit-dialog").close();
+    }
+  });
+
   $("next").addEventListener("click", async () => {
-    if (!nextCursor) return;
-
-    previousCursors.push(currentCursor);
-
-    currentCursor = nextCursor;
-
+    if (busy || currentPage >= totalPages) return;
+    currentPage += 1;
     await loadProducts();
   });
 
   $("previous").addEventListener("click", async () => {
-    if (previousCursors.length === 0) {
-      return;
-    }
+    if (busy || currentPage <= 1) return;
+    currentPage -= 1;
+    await loadProducts();
+  });
 
-    currentCursor = previousCursors.pop();
-
+  $("page-size").addEventListener("change", async () => {
+    pageSize = Number($("page-size").value) || 30;
+    resetProductPagination();
     await loadProducts();
   });
 
@@ -987,6 +1732,7 @@
     }
   });
 
+  restoreSyncPanelState();
   setConnection(false);
 
   tryLocalAdmin();

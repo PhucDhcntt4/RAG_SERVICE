@@ -19,17 +19,45 @@ from app.product_sync.payload_builder import (
     build_catalog_payload,
     inactive_payload,
 )
+from app.product_sync.change_detector import build_product_change
 from app.product_sync.qdrant_store import (
     ProductQdrantStore,
     catalog_point_id,
 )
-from app.product_sync.shopify_client import ShopifyClient, ShopifyConfig
+from app.product_sync.shopify_client import (
+    ShopifyClient,
+    ShopifyConfig,
+    aggregate_shopify_status,
+    exact_products_for_code,
+)
 
 logger = logging.getLogger("rag_service.product_sync.execute")
 
 
 def clean(value) -> str:
     return str(value or "").strip()
+
+
+def image_source_kind(point: dict) -> str:
+    payload = point.get("payload") or {}
+    explicit = clean(payload.get("source_kind")).lower()
+    if explicit:
+        return explicit
+
+    source_url = clean(payload.get("source_url")).lower()
+    local_path = clean(payload.get("local_path")).replace("\\", "/").lower()
+
+    if source_url.startswith("recognition://"):
+        return "recognition"
+    if "/recognition/" in f"/{local_path}":
+        return "recognition"
+
+    # Legacy Product Sync vectors without source_kind are treated as Shopify-managed.
+    return "shopify"
+
+
+def is_shopify_managed_image(point: dict) -> bool:
+    return image_source_kind(point) == "shopify"
 
 
 def configure_logging(level):
@@ -70,35 +98,6 @@ def image_identity(checksum: str, color: str) -> tuple[str, str]:
     return clean(checksum), clean(color)
 
 
-def image_source_kind(point: dict) -> str:
-    """Classify ownership of an image point for lifecycle management.
-
-    Explicit source_kind always wins. Legacy points without source_kind are
-    treated as Shopify-managed unless they clearly use the recognition source.
-    This keeps old Shopify vectors maintainable while protecting vectors
-    imported by recognition/marketing clients.
-    """
-    payload = point.get("payload") or {}
-
-    source_kind = clean(payload.get("source_kind")).casefold()
-    if source_kind:
-        return source_kind
-
-    source_url = clean(payload.get("source_url")).casefold()
-    local_path = clean(payload.get("local_path")).replace("\\", "/").casefold()
-
-    if source_url.startswith("recognition://") or "/recognition/" in f"/{local_path.lstrip('/')}":
-        return "recognition"
-
-    # Backward compatibility: old Product RAG image points did not have
-    # source_kind, so they remain managed by the Shopify synchronizer.
-    return "shopify"
-
-
-def is_shopify_managed_image(point: dict) -> bool:
-    return image_source_kind(point) == "shopify"
-
-
 def standard_image_payload(
     point_id: int,
     product_code: str,
@@ -120,16 +119,10 @@ def standard_image_payload(
 
 
 def current_image_index(points: list[dict]):
-    """Index only Shopify-managed points.
-
-    External/recognition vectors stay searchable in Qdrant but are never reused
-    as Shopify-owned vectors and never become candidates for Shopify cleanup.
-    """
     by_identity = defaultdict(list)
     for point in points:
         if not is_shopify_managed_image(point):
             continue
-
         payload = point.get("payload") or {}
         identity = image_identity(
             payload.get("image_checksum"),
@@ -313,16 +306,7 @@ class SyncExecutor:
         old_payload = (existing_row or {}).get("payload")
         payload, diff = build_catalog_payload(group, old_payload)
 
-        managed_points = [
-            point for point in current_points
-            if is_shopify_managed_image(point)
-        ]
-        protected_points = [
-            point for point in current_points
-            if not is_shopify_managed_image(point)
-        ]
-
-        current_index = current_image_index(managed_points)
+        current_index = current_image_index(current_points)
         known_target = [
             image_identity(image.get("checksum"), image.get("color"))
             for image in payload.get("images") or []
@@ -360,11 +344,6 @@ class SyncExecutor:
             "source_products": group.source_product_count,
             "target_images": len(payload.get("images") or []),
             "current_image_points": len(current_points),
-            "shopify_managed_image_points": len(managed_points),
-            "protected_image_points": len(protected_points),
-            "protected_image_point_ids": [
-                point["point_id"] for point in protected_points
-            ],
             "known_target_images": len(known_target),
             "unresolved_target_images": unresolved,
             "known_target_missing_vectors": len(missing_known),
@@ -382,6 +361,7 @@ class SyncExecutor:
         group,
         existing_row: dict | None,
         current_points: list[dict],
+        payload_enricher: Callable[[dict], dict] | None = None,
     ) -> dict:
         old_payload = (existing_row or {}).get("payload")
         payload, _ = build_catalog_payload(group, old_payload)
@@ -402,14 +382,8 @@ class SyncExecutor:
         self.qdrant.upsert_catalog(point_id, staged)
 
         managed_points = [
-            point for point in current_points
-            if is_shopify_managed_image(point)
+            point for point in current_points if is_shopify_managed_image(point)
         ]
-        protected_points = [
-            point for point in current_points
-            if not is_shopify_managed_image(point)
-        ]
-
         current_index = current_image_index(managed_points)
         kept_point_ids = set()
         final_images = []
@@ -445,7 +419,15 @@ class SyncExecutor:
             final_images,
             ai_ready,
         )
+        if payload_enricher is not None:
+            final_payload = payload_enricher(final_payload)
         self.qdrant.upsert_catalog(point_id, final_payload)
+
+        audit_change = build_product_change(
+            product_code=code,
+            old_payload=old_payload,
+            new_payload=final_payload,
+        )
 
         return {
             "product_code": code,
@@ -454,8 +436,8 @@ class SyncExecutor:
             "images": len(final_images),
             "new_embeddings": embedded_new,
             "removed_image_points": len(stale_ids),
-            "protected_image_points": len(protected_points),
             "ai_ready": ai_ready,
+            "audit_change": audit_change,
         }
 
     def apply_inactive_product(
@@ -463,8 +445,14 @@ class SyncExecutor:
         code: str,
         existing_row: dict,
         current_points: list[dict],
+        *,
+        shopify_status: str = "INACTIVE",
     ) -> dict:
-        payload = inactive_payload(existing_row["payload"])
+        shopify_status = clean(shopify_status).upper() or "INACTIVE"
+        payload = inactive_payload(
+            existing_row["payload"],
+            status=shopify_status,
+        )
 
         images = []
         for image in payload.get("images") or []:
@@ -473,33 +461,29 @@ class SyncExecutor:
             images.append(item)
 
         payload = finalize_catalog_payload(payload, images, False)
-        payload["status"] = "INACTIVE"
-        payload["summary"]["status"] = "INACTIVE"
-        payload["public_info"]["status"] = "INACTIVE"
-        payload["detail"]["product"]["status"] = "INACTIVE"
-
-        # Catalog becomes non-retrievable before Shopify-managed image vectors
-        # are removed. External/recognition vectors are owned by another client
-        # and must never be deleted by the Shopify synchronizer.
+        # Catalog becomes non-retrievable before Shopify-managed image vectors are removed.
         self.qdrant.upsert_catalog(existing_row["point_id"], payload)
-
         managed_points = [
-            point for point in current_points
-            if is_shopify_managed_image(point)
+            point for point in current_points if is_shopify_managed_image(point)
         ]
-        protected_points = [
-            point for point in current_points
-            if not is_shopify_managed_image(point)
-        ]
-        managed_ids = [point["point_id"] for point in managed_points]
-        self.qdrant.delete_image_points(managed_ids)
+        self.qdrant.delete_image_points(
+            [point["point_id"] for point in managed_points]
+        )
+
+        audit_change = build_product_change(
+            product_code=code,
+            old_payload=existing_row.get("payload") or {},
+            new_payload=payload,
+            change_type="INACTIVATED",
+        )
 
         return {
             "product_code": code,
             "status": "inactivated",
-            "removed_image_points": len(managed_ids),
-            "protected_image_points": len(protected_points),
+            "shopify_status": shopify_status,
+            "removed_image_points": len(managed_points),
             "ai_ready": False,
+            "audit_change": audit_change,
         }
 
 
@@ -543,6 +527,7 @@ def main():
         )
 
     executor = SyncExecutor(settings, apply=args.apply)
+    status_client = ShopifyClient(ShopifyConfig.load())
 
     try:
         config = executor.qdrant.validate()
@@ -629,16 +614,23 @@ def main():
                             current_points,
                         )
                 else:
+                    shopify_sources = exact_products_for_code(
+                        status_client,
+                        code,
+                    )
+                    shopify_status = aggregate_shopify_status(shopify_sources)
                     if args.apply:
                         result = executor.apply_inactive_product(
                             code,
                             existing[code],
                             current_points,
+                            shopify_status=shopify_status,
                         )
                     else:
                         result = {
                             "product_code": code,
                             "catalog_action": "INACTIVATE",
+                            "shopify_status": shopify_status,
                             "current_image_points": len(current_points),
                             "ai_ready_after": False,
                         }
@@ -719,6 +711,7 @@ def main():
             raise SystemExit(2)
 
     finally:
+        status_client.close()
         executor.close()
 
 

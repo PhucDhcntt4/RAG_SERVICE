@@ -82,6 +82,75 @@ class InventorySyncRepository:
                 """,
                 (default_enabled, default_interval),
             )
+
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS rag_metadata.product_inventory_sync_runs (
+                    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                    trigger_type VARCHAR(20) NOT NULL
+                        CHECK (trigger_type IN ('manual', 'scheduled')),
+                    status VARCHAR(20) NOT NULL
+                        CHECK (status IN ('running', 'completed', 'failed')),
+
+                    shopify_products INTEGER NOT NULL DEFAULT 0,
+                    shopify_variants INTEGER NOT NULL DEFAULT 0,
+                    skipped_without_code INTEGER NOT NULL DEFAULT 0,
+                    checked_products INTEGER NOT NULL DEFAULT 0,
+                    updated_products INTEGER NOT NULL DEFAULT 0,
+                    checked_variants INTEGER NOT NULL DEFAULT 0,
+                    changed_variants INTEGER NOT NULL DEFAULT 0,
+                    missing_products INTEGER NOT NULL DEFAULT 0,
+                    missing_variants INTEGER NOT NULL DEFAULT 0,
+
+                    error_message TEXT NOT NULL DEFAULT '',
+                    report_path TEXT NOT NULL DEFAULT '',
+                    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    finished_at TIMESTAMPTZ,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_product_inventory_runs_started
+                ON rag_metadata.product_inventory_sync_runs(started_at DESC, id DESC)
+                """
+            )
+
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS rag_metadata.product_inventory_sync_changes (
+                    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                    run_id BIGINT NOT NULL
+                        REFERENCES rag_metadata.product_inventory_sync_runs(id)
+                        ON DELETE CASCADE,
+                    product_code VARCHAR(100) NOT NULL,
+                    product_title TEXT NOT NULL DEFAULT '',
+                    variant_key VARCHAR(200) NOT NULL,
+                    variant_title TEXT NOT NULL DEFAULT '',
+                    sku VARCHAR(150) NOT NULL DEFAULT '',
+                    before_quantity INTEGER,
+                    after_quantity INTEGER,
+                    before_available BOOLEAN,
+                    after_available BOOLEAN,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE (run_id, product_code, variant_key)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_inventory_sync_changes_run
+                ON rag_metadata.product_inventory_sync_changes(run_id, id DESC)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_inventory_sync_changes_product
+                ON rag_metadata.product_inventory_sync_changes(product_code)
+                """
+            )
         return self.get_status()
 
     @staticmethod
@@ -151,6 +220,19 @@ class InventorySyncRepository:
 
     def recover_interrupted(self):
         with self.connection() as conn:
+            conn.execute(
+                """
+                UPDATE rag_metadata.product_inventory_sync_runs
+                SET status='failed',
+                    error_message=CASE
+                        WHEN error_message='' THEN 'Worker khởi động lại khi job đang chạy.'
+                        ELSE error_message
+                    END,
+                    finished_at=NOW(),
+                    updated_at=NOW()
+                WHERE status='running'
+                """
+            )
             row = conn.execute(
                 """
                 UPDATE rag_metadata.product_inventory_sync_state
@@ -212,11 +294,31 @@ class InventorySyncRepository:
                     """,
                     (trigger,),
                 ).fetchone()
+
+                run = conn.execute(
+                    """
+                    INSERT INTO rag_metadata.product_inventory_sync_runs (
+                        trigger_type,
+                        status,
+                        started_at
+                    )
+                    VALUES (%s, 'running', NOW())
+                    RETURNING id
+                    """,
+                    (trigger,),
+                ).fetchone()
                 result = dict(claimed)
                 result["trigger_type"] = trigger
+                result["run_id"] = run["id"]
                 return result
 
-    def complete(self, stats: dict):
+    def complete(
+        self,
+        stats: dict,
+        *,
+        run_id: int | None = None,
+        report_path: str = "",
+    ):
         with self.connection() as conn:
             row = conn.execute(
                 """
@@ -245,9 +347,54 @@ class InventorySyncRepository:
                     int(stats.get("missing_variants") or 0),
                 ),
             ).fetchone()
+
+            if run_id is not None:
+                updated_run = conn.execute(
+                    """
+                    UPDATE rag_metadata.product_inventory_sync_runs
+                    SET status='completed',
+                        shopify_products=%s,
+                        shopify_variants=%s,
+                        skipped_without_code=%s,
+                        checked_products=%s,
+                        updated_products=%s,
+                        checked_variants=%s,
+                        changed_variants=%s,
+                        missing_products=%s,
+                        missing_variants=%s,
+                        error_message='',
+                        report_path=%s,
+                        finished_at=NOW(),
+                        updated_at=NOW()
+                    WHERE id=%s
+                    """,
+                    (
+                        int(stats.get("shopify_products") or 0),
+                        int(stats.get("shopify_variants") or 0),
+                        int(stats.get("skipped_without_code") or 0),
+                        int(stats.get("checked_products") or 0),
+                        int(stats.get("updated_products") or 0),
+                        int(stats.get("checked_variants") or 0),
+                        int(stats.get("changed_variants") or 0),
+                        int(stats.get("missing_products") or 0),
+                        int(stats.get("missing_variants") or 0),
+                        str(report_path or "")[:2000],
+                        run_id,
+                    ),
+                )
+                if updated_run.rowcount != 1:
+                    raise RuntimeError(
+                        f"Không tìm thấy Inventory Sync run #{run_id}"
+                    )
         return self._with_next_run(row)
 
-    def fail(self, message: str, *, retry_minutes: int = 15):
+    def fail(
+        self,
+        message: str,
+        *,
+        run_id: int | None = None,
+        retry_minutes: int = 15,
+    ):
         retry_minutes = min(max(int(retry_minutes), 1), 1440)
         with self.connection() as conn:
             row = conn.execute(
@@ -263,4 +410,164 @@ class InventorySyncRepository:
                 """,
                 (retry_minutes, message[:2000]),
             ).fetchone()
+
+            if run_id is not None:
+                updated_run = conn.execute(
+                    """
+                    UPDATE rag_metadata.product_inventory_sync_runs
+                    SET status='failed',
+                        error_message=%s,
+                        finished_at=NOW(),
+                        updated_at=NOW()
+                    WHERE id=%s
+                    """,
+                    (message[:2000], run_id),
+                )
+                if updated_run.rowcount != 1:
+                    raise RuntimeError(
+                        f"Không tìm thấy Inventory Sync run #{run_id}"
+                    )
         return self._with_next_run(row)
+
+    def history(self, limit: int = 20):
+        limit = min(max(int(limit), 1), 100)
+        with self.connection() as conn:
+            return conn.execute(
+                """
+                SELECT *
+                FROM rag_metadata.product_inventory_sync_runs
+                ORDER BY id DESC
+                LIMIT %s
+                """,
+                (limit,),
+            ).fetchall()
+
+    def history_page(self, page: int = 1, page_size: int = 5):
+        page = max(int(page), 1)
+        page_size = min(max(int(page_size), 1), 100)
+
+        with self.connection() as conn:
+            total_row = conn.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM rag_metadata.product_inventory_sync_runs
+                """
+            ).fetchone()
+            total = int(total_row["total"] if total_row else 0)
+            total_pages = max(1, (total + page_size - 1) // page_size)
+            page = min(page, total_pages)
+            rows = conn.execute(
+                """
+                SELECT r.*,
+                       (
+                           SELECT COUNT(*)
+                           FROM rag_metadata.product_inventory_sync_changes c
+                           WHERE c.run_id=r.id
+                       ) AS change_count
+                FROM rag_metadata.product_inventory_sync_runs r
+                ORDER BY r.id DESC
+                LIMIT %s OFFSET %s
+                """,
+                (page_size, (page - 1) * page_size),
+            ).fetchall()
+
+        return {
+            "runs": rows,
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": total_pages,
+        }
+
+    def save_changes(self, run_id: int, changes: list[dict]):
+        if not changes:
+            return 0
+
+        values = [
+            (
+                int(run_id),
+                str(row.get("product_code") or "")[:100],
+                str(row.get("product_title") or ""),
+                str(row.get("variant_key") or "")[:200],
+                str(row.get("variant_title") or ""),
+                str(row.get("sku") or "")[:150],
+                row.get("before_quantity"),
+                row.get("after_quantity"),
+                row.get("before_available"),
+                row.get("after_available"),
+            )
+            for row in changes
+        ]
+
+        with self.connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.executemany(
+                    """
+                    INSERT INTO rag_metadata.product_inventory_sync_changes (
+                        run_id,
+                        product_code,
+                        product_title,
+                        variant_key,
+                        variant_title,
+                        sku,
+                        before_quantity,
+                        after_quantity,
+                        before_available,
+                        after_available
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (run_id, product_code, variant_key)
+                    DO UPDATE SET
+                        product_title=EXCLUDED.product_title,
+                        variant_title=EXCLUDED.variant_title,
+                        sku=EXCLUDED.sku,
+                        before_quantity=EXCLUDED.before_quantity,
+                        after_quantity=EXCLUDED.after_quantity,
+                        before_available=EXCLUDED.before_available,
+                        after_available=EXCLUDED.after_available
+                    """,
+                    values,
+                )
+        return len(values)
+
+    def changes_page(
+        self,
+        run_id: int,
+        *,
+        page: int = 1,
+        page_size: int = 10,
+    ):
+        page = max(int(page), 1)
+        page_size = min(max(int(page_size), 1), 100)
+
+        with self.connection() as conn:
+            total_row = conn.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM rag_metadata.product_inventory_sync_changes
+                WHERE run_id=%s
+                """,
+                (int(run_id),),
+            ).fetchone()
+            total = int(total_row["total"] if total_row else 0)
+            total_pages = max(1, (total + page_size - 1) // page_size)
+            page = min(page, total_pages)
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM rag_metadata.product_inventory_sync_changes
+                WHERE run_id=%s
+                ORDER BY id DESC
+                LIMIT %s OFFSET %s
+                """,
+                (int(run_id), page_size, (page - 1) * page_size),
+            ).fetchall()
+
+        return {
+            "run_id": int(run_id),
+            "changes": rows,
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": total_pages,
+        }

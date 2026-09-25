@@ -162,14 +162,21 @@ def _refresh_public_inventory(payload: dict, variants: list[dict], synced_at: st
     payload["public_info"] = public
 
 
-def update_catalog_inventory(payload: dict, remote_rows: list[dict], synced_at: str):
+def update_catalog_inventory(
+    payload: dict,
+    remote_rows: list[dict],
+    synced_at: str,
+    *,
+    product_code: str = "",
+):
     result = copy.deepcopy(payload)
     local_variants = [dict(row) for row in (result.get("variants") or [])]
     indexes = _variant_indexes(remote_rows)
     changed_variants = 0
     missing_variants = 0
+    change_details = []
 
-    for row in local_variants:
+    for variant_index, row in enumerate(local_variants):
         remote = _find_remote_variant(row, indexes)
         if remote is None:
             missing_variants += 1
@@ -180,6 +187,39 @@ def update_catalog_inventory(payload: dict, remote_rows: list[dict], synced_at: 
         new_available = bool(remote.get("available"))
         if old_qty != new_qty or old_available != new_available:
             changed_variants += 1
+            composite_parts = (
+                clean(row.get("sku")),
+                clean(row.get("color")),
+                clean(row.get("size")),
+            )
+            composite_key = "|".join(composite_parts) if any(composite_parts) else ""
+            variant_key = (
+                clean(row.get("external_id"))
+                or clean(row.get("legacy_id"))
+                or composite_key
+                or f"variant-{variant_index}"
+            )
+            change_details.append(
+                {
+                    "product_code": product_code or clean(payload.get("product_code")),
+                    "product_title": clean(payload.get("title")),
+                    "variant_key": variant_key,
+                    "variant_title": clean(row.get("variant_title"))
+                    or " / ".join(
+                        value
+                        for value in (
+                            clean(row.get("color")),
+                            clean(row.get("size")),
+                        )
+                        if value
+                    ),
+                    "sku": clean(row.get("sku")),
+                    "before_quantity": old_qty,
+                    "after_quantity": new_qty,
+                    "before_available": old_available,
+                    "after_available": new_available,
+                }
+            )
         row["inventory_quantity"] = new_qty
         row["available"] = new_available
 
@@ -204,7 +244,7 @@ def update_catalog_inventory(payload: dict, remote_rows: list[dict], synced_at: 
     summary["available_variant_count"] = sum(1 for row in local_variants if bool(row.get("available")))
     result["summary"] = summary
 
-    return result, changed_variants, missing_variants
+    return result, changed_variants, missing_variants, change_details
 
 
 class InventorySyncExecutor:
@@ -233,6 +273,7 @@ class InventorySyncExecutor:
             "changed_variants": 0,
             "missing_products": 0,
             "missing_variants": 0,
+            "_change_details": [],
         }
 
         pending = []
@@ -255,13 +296,15 @@ class InventorySyncExecutor:
             stats["checked_products"] += 1
             stats["checked_variants"] += len(local_variants)
 
-            updated_payload, changed_variants, missing_variants = update_catalog_inventory(
+            updated_payload, changed_variants, missing_variants, change_details = update_catalog_inventory(
                 payload,
                 remote_rows,
                 synced_at,
+                product_code=code,
             )
             stats["changed_variants"] += changed_variants
             stats["missing_variants"] += missing_variants
+            stats["_change_details"].extend(change_details)
             if changed_variants:
                 stats["updated_products"] += 1
 
