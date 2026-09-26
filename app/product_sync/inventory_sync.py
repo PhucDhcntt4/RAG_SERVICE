@@ -57,14 +57,50 @@ def unique(values):
     return result
 
 
-def build_inventory_snapshot(progress: Callable[[], None] | None = None):
+def build_inventory_snapshot(
+    progress: Callable[[], None] | None = None,
+    *,
+    updated_after: str | None = None,
+    updated_before: str | None = None,
+):
     client = ShopifyClient(ShopifyConfig.load())
     by_code: dict[str, list[dict]] = defaultdict(list)
     product_count = 0
     variant_count = 0
     skipped_without_code = 0
+    mode = "delta" if updated_after and updated_before else "full"
     try:
-        for product in client.iter_active_inventory_products():
+        if mode == "delta":
+            changed_products = list(
+                client.iter_updated_inventory_products(
+                    updated_after,
+                    updated_before,
+                )
+            )
+            affected_codes = sorted(
+                {
+                    code
+                    for product in changed_products
+                    if (code := product_code_from_shopify(product))
+                }
+            )
+            products = []
+            for code in affected_codes:
+                target = code.casefold()
+                products.extend(
+                    product
+                    for product in client.iter_inventory_products_by_sku(code)
+                    if str(product.get("status") or "").upper() == "ACTIVE"
+                    and (product_code_from_shopify(product) or "").casefold() == target
+                )
+                if progress:
+                    progress()
+        else:
+            changed_products = None
+            affected_codes = None
+            products = client.iter_active_inventory_products()
+
+        for product in products:
             product_count += 1
             code = product_code_from_shopify(product)
             if not code:
@@ -85,6 +121,9 @@ def build_inventory_snapshot(progress: Callable[[], None] | None = None):
         client.close()
 
     return {
+        "mode": mode,
+        "changed_products": len(changed_products) if changed_products is not None else product_count,
+        "affected_codes": len(affected_codes) if affected_codes is not None else len(by_code),
         "products": product_count,
         "variants": variant_count,
         "skipped_without_code": skipped_without_code,
@@ -256,14 +295,30 @@ class InventorySyncExecutor:
     def close(self):
         self.qdrant.close()
 
-    def run(self, progress: Callable[[], None] | None = None, max_products: int | None = None):
+    def run(
+        self,
+        progress: Callable[[], None] | None = None,
+        max_products: int | None = None,
+        *,
+        updated_after: str | None = None,
+        updated_before: str | None = None,
+    ):
         self.qdrant.validate()
-        existing = self.qdrant.all_catalog()
-        snapshot = build_inventory_snapshot(progress)
+        is_delta = bool(updated_after and updated_before)
+        snapshot = build_inventory_snapshot(
+            progress,
+            updated_after=updated_after,
+            updated_before=updated_before,
+        )
         remote_by_code = snapshot["by_code"]
         synced_at = datetime.now(UTC).isoformat(timespec="seconds")
 
         stats = {
+            "sync_mode": "delta" if is_delta else "full",
+            "window_start_at": updated_after,
+            "window_end_at": updated_before,
+            "changed_shopify_products": snapshot["changed_products"],
+            "affected_codes": snapshot["affected_codes"],
             "shopify_products": snapshot["products"],
             "shopify_variants": snapshot["variants"],
             "skipped_without_code": snapshot["skipped_without_code"],
@@ -277,11 +332,24 @@ class InventorySyncExecutor:
         }
 
         pending = []
-        rows = [
-            (code, entry)
-            for code, entry in sorted(existing.items())
-            if str((entry.get("payload") or {}).get("status") or "").upper() == "ACTIVE"
-        ]
+        if is_delta:
+            rows = []
+            for code in sorted(remote_by_code):
+                entry = self.qdrant.catalog_by_code(code)
+                if entry is None:
+                    stats["missing_products"] += 1
+                    continue
+                if str((entry.get("payload") or {}).get("status") or "").upper() != "ACTIVE":
+                    stats["missing_products"] += 1
+                    continue
+                rows.append((code, entry))
+        else:
+            existing = self.qdrant.all_catalog()
+            rows = [
+                (code, entry)
+                for code, entry in sorted(existing.items())
+                if str((entry.get("payload") or {}).get("status") or "").upper() == "ACTIVE"
+            ]
         if max_products is not None:
             rows = rows[: max(0, int(max_products))]
 

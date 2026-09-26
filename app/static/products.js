@@ -853,14 +853,13 @@
   }
 
   function syncModeText(mode, triggerType = "manual") {
-    if (mode === "all_active") return "Tất cả ACTIVE";
-    return "Đồng bộ thành công";
+    if (mode === "all_active") return "Full Sync bảo trì";
+    return "Đồng bộ sản phẩm";
   }
 
   function updateSyncButtons(activeJob) {
     const blocked = Boolean(activeJob) || !writeEnabled;
     $("sync-existing").disabled = blocked;
-    $("sync-all").disabled = blocked;
     $("save-sync-settings").disabled = false;
   }
 
@@ -1187,7 +1186,6 @@
   async function loadSyncSettings() {
     const data = await api("/api/v1/products/sync/settings");
     $("auto-sync-enabled").checked = Boolean(data.enabled);
-    $("auto-sync-mode").value = data.sync_mode || "existing";
     $("auto-sync-time").value = String(data.sync_time || "02:00").slice(0, 5);
     $("auto-sync-timezone").value = data.timezone || "Asia/Ho_Chi_Minh";
   }
@@ -1307,6 +1305,9 @@
       `Lần tiếp theo: ${formatDate(data.next_run_at)}`;
 
     const stats = [
+      data.inventory_checkpoint_at
+        ? `Checkpoint ${formatDate(data.inventory_checkpoint_at)}`
+        : "Checkpoint chưa khởi tạo",
       `SP kiểm tra ${formatNumber(data.last_checked_products || 0)}`,
       `SP đổi ${formatNumber(data.last_updated_products || 0)}`,
       `variant đổi ${formatNumber(data.last_changed_variants || 0)}`,
@@ -1328,6 +1329,13 @@
       const tr = document.createElement("tr");
       tr.append(createTextCell(`#${run.id}`));
       tr.append(createTextCell(run.trigger_type || "—"));
+      tr.append(
+        createTextCell(
+          run.sync_mode === "delta"
+            ? "Đồng bộ tồn kho"
+            : "Đồng bộ tồn kho lần đầu",
+        ),
+      );
       tr.append(createTextCell(syncStatusText(run.status)));
       tr.append(createTextCell(formatNumber(run.checked_products || 0)));
       tr.append(createTextCell(formatNumber(run.checked_variants || 0)));
@@ -1373,7 +1381,7 @@
     if (!runs.length) {
       const tr = document.createElement("tr");
       const td = document.createElement("td");
-      td.colSpan = 10;
+      td.colSpan = 11;
       td.textContent = "Chưa có lịch sử đồng bộ tồn kho.";
       tr.append(td);
       tbody.append(tr);
@@ -1489,7 +1497,7 @@
     try {
       const body = {
         enabled: $("auto-sync-enabled").checked,
-        sync_mode: $("auto-sync-mode").value,
+        sync_mode: "existing",
         sync_time: $("auto-sync-time").value || "02:00",
         timezone: $("auto-sync-timezone").value || "Asia/Ho_Chi_Minh",
       };
@@ -1626,7 +1634,6 @@
   });
 
   $("sync-existing").addEventListener("click", () => enqueueSync("existing"));
-  $("sync-all").addEventListener("click", () => enqueueSync("all_active"));
   $("sync-refresh").addEventListener("click", refreshSyncArea);
   $("save-sync-settings").addEventListener("click", saveSyncSettings);
   $("adjust-delta-checkpoint").addEventListener(
@@ -1637,10 +1644,7 @@
     "input",
     updateCheckpointPreview,
   );
-  $("delta-checkpoint-form").addEventListener(
-    "submit",
-    saveDeltaCheckpoint,
-  );
+  $("delta-checkpoint-form").addEventListener("submit", saveDeltaCheckpoint);
   $("close-delta-checkpoint").addEventListener("click", () => {
     $("delta-checkpoint-dialog").close();
   });

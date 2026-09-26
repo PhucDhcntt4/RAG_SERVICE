@@ -9,11 +9,11 @@
     <link rel="stylesheet" href="/assets/admin.css?v=20260921-2" />
     <link
       rel="stylesheet"
-      href="/assets/products-sync.css?v=20260924-checkpoint1"
+      href="/assets/products-sync.css?v=20260925-smart-sync1"
     />
     <link rel="stylesheet" href="/assets/products.css?v=20260924-pagination1" />
 
-    <script src="/assets/products.js?v=20260924-checkpoint1" defer></script>
+    <script src="/assets/products.js?v=20260925-smart-sync1" defer></script>
   </head>
 
   <body>
@@ -177,14 +177,11 @@
           </div>
 
           <div class="sync-actions">
-            <button class="secondary" type="button" id="sync-existing">
+            <button class="primary" type="button" id="sync-existing">
               Đồng bộ sản phẩm
             </button>
-            <button class="primary" type="button" id="sync-all">
-              Đồng bộ tất cả sản phẩm ACTIVE
-            </button>
             <button class="secondary" type="button" id="sync-refresh">
-              ↻ Làm mới
+              ↻ kiểm tra worker
             </button>
           </div>
 
@@ -234,14 +231,6 @@
             </label>
 
             <label>
-              <span>Phạm vi</span>
-              <select id="auto-sync-mode">
-                <option value="existing">Đồng bộ sản phẩm</option>
-                <option value="all_active">Tất cả Shopify ACTIVE</option>
-              </select>
-            </label>
-
-            <label>
               <span>Giờ chạy</span>
               <input type="time" id="auto-sync-time" value="02:00" />
             </label>
@@ -263,7 +252,7 @@
           <div class="delta-checkpoint-card">
             <div>
               <span class="delta-checkpoint-label"
-                >CHECKPOINT( thời điểm điểm bộ )</span
+                >CHECKPOINT( thời điểm đồng bộ )</span
               >
               <strong id="delta-checkpoint-time">Chưa tải checkpoint</strong>
               <p id="delta-checkpoint-detail">—</p>
@@ -355,7 +344,7 @@
               Lưu lịch
             </button>
             <button class="primary" type="button" id="inventory-sync-now">
-              Sync tồn kho ngay
+              Đồng bộ tồn kho ngay
             </button>
           </div>
 
@@ -376,6 +365,7 @@
                   <tr>
                     <th>JOB</th>
                     <th>TRIGGER</th>
+                    <th>MODE</th>
                     <th>TRẠNG THÁI</th>
                     <th>SẢN PHẨM</th>
                     <th>BIẾN THỂ</th>

@@ -1,4 +1,4 @@
-# Hướng dẫn vận hành Product RAG từ Delta Sync
+# Hướng dẫn vận hành Product RAG với Smart Sync
 
 Tài liệu này mô tả quy trình chính thức để đồng bộ Shopify vào Product RAG sau khi hệ thống đã chuyển sang Qdrant, PostgreSQL checkpoint và worker chạy nền.
 
@@ -6,13 +6,12 @@ Tài liệu này mô tả quy trình chính thức để đồng bộ Shopify v�
 
 | Chức năng trên giao diện | Cách xử lý | Khi sử dụng |
 |---|---|---|
-| Chạy Delta Sync ngay | Chỉ xử lý sản phẩm Shopify thay đổi từ checkpoint | Vận hành hằng ngày hoặc kiểm tra ngay thay đổi mới |
+| Đồng bộ sản phẩm | Chưa có checkpoint: Full Sync + Delta bù; đã có checkpoint: chỉ chạy Delta | Khởi tạo lần đầu và vận hành hằng ngày |
 | Lịch `Delta thay đổi` | Worker tự chạy Delta mỗi ngày | Chế độ vận hành chính |
-| Đồng bộ tất cả sản phẩm ACTIVE | Full Sync/Full Reconcile | Khởi tạo lần đầu, phục hồi hoặc đối soát toàn bộ |
 | Sync tồn kho ngay | Quét tồn kho ACTIVE, cập nhật catalog Qdrant | Kiểm tra tồn kho thủ công |
 | Lịch tồn kho | Chạy Inventory Sync theo chu kỳ giờ | Cập nhật tồn kho định kỳ |
 
-Không dùng Full Sync cho mọi lần chạy hằng ngày vì Full Sync phải đọc và đối soát toàn bộ sản phẩm, hình ảnh và vector.
+`all_active` vẫn tồn tại ở backend như chế độ Full Reconcile bảo trì, nhưng không hiển thị thành nút riêng trên giao diện.
 
 ## 2. Cấu hình bắt buộc
 
@@ -40,9 +39,7 @@ INVENTORY_SYNC_INTERVAL_HOURS=6
 
 Không đưa mật khẩu, API key thật vào Git.
 
-## 3. Quy trình cho dự án hiện tại đã Full Sync
-
-Qdrant của dự án hiện tại đã có dữ liệu từ Full Sync. Không chạy Full Sync lại chỉ để bật Delta. Việc cần làm là bảo đảm PostgreSQL có bảng metadata và checkpoint Delta.
+## 3. Quy trình khởi tạo và vận hành
 
 ### Bước 1: Cài thư viện
 
@@ -61,37 +58,13 @@ Database trong `DATABASE_URL` phải tồn tại trước. Sau đó chạy:
 
 Lệnh này không xóa vector Qdrant. Lệnh tạo hoặc bổ sung các bảng metadata cần thiết.
 
-### Bước 3: Kiểm tra checkpoint Delta
-
-Chạy trong PostgreSQL:
-
-```sql
-SELECT *
-FROM rag_metadata.product_delta_state
-WHERE sync_name = 'shopify_product_delta';
-```
-
-- Nếu đã có một dòng: Delta đã bootstrap. Không chạy bootstrap lại.
-- Nếu chưa có dòng: Qdrant đã Full Sync nên có thể bootstrap ngay một lần.
-
-```cmd
-.\.venv\Scripts\python.exe -m app.product_sync.delta_sync --bootstrap
-```
-
-Bootstrap thực hiện hai việc:
-
-- Ghi checkpoint `last_success_at` vào PostgreSQL.
-- Tạo bản đồ `Shopify product ID → product_code` để phát hiện cả trường hợp đổi SKU.
-
-Không chạy bootstrap hằng ngày. Bootstrap lại sẽ đưa checkpoint tới thời điểm hiện tại và có thể bỏ qua thay đổi chưa được đồng bộ trước đó.
-
-### Bước 4: Khởi động API
+### Bước 3: Khởi động API
 
 ```cmd
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-### Bước 5: Khởi động worker ở terminal riêng
+### Bước 4: Khởi động worker ở terminal riêng
 
 ```cmd
 .\.venv\Scripts\python.exe -m app.product_sync.worker
@@ -99,32 +72,38 @@ Không chạy bootstrap hằng ngày. Bootstrap lại sẽ đưa checkpoint tớ
 
 Chỉ chạy một Product Sync Worker. PostgreSQL advisory lock sẽ từ chối worker thứ hai.
 
+### Bước 5: Nhấn Đồng bộ sản phẩm
+
+Worker tự kiểm tra:
+
+```sql
+SELECT *
+FROM rag_metadata.product_delta_state
+WHERE sync_name = 'shopify_product_delta';
+```
+
+- Nếu đã có checkpoint: job chạy Delta ngay.
+- Nếu chưa có checkpoint: job thu baseline Shopify tại `T0`, Full Sync toàn bộ ACTIVE, lưu mapping/checkpoint `T0`, sau đó chạy Delta bù tới thời điểm hiện tại.
+- Nếu Full Sync có bất kỳ sản phẩm lỗi nào: chưa kích hoạt checkpoint; lần chạy sau thử lại Full Sync.
+- Nếu Delta bù lỗi: checkpoint vẫn ở `T0`; lần chạy sau đi thẳng vào Delta để tiếp tục bắt kịp.
+
 ### Bước 6: Bật lịch Delta
 
 Trên giao diện:
 
 1. Bật **Đồng bộ sản phẩm hằng ngày**.
-2. Chọn phạm vi **Delta thay đổi**.
+2. Phạm vi cố định là **Delta theo checkpoint**.
 3. Chọn giờ chạy và lưu lịch.
 
 Sau bước này worker tự tạo tối đa một scheduled job cho mỗi ngày.
 
 ### Nếu Qdrant hoàn toàn mới hoặc trống
 
-Chỉ trong trường hợp Qdrant chưa có baseline:
-
-1. Tạm thời chưa bật lịch Delta.
-2. Khởi động API và worker.
-3. Nhấn **Đồng bộ tất cả sản phẩm ACTIVE**.
-4. Chờ Full Sync hoàn tất và kiểm tra lỗi.
-5. Chạy `delta_sync --bootstrap` đúng một lần.
-6. Bật lịch Delta.
-
-Đây không phải trường hợp của dự án hiện tại.
+Tạo trước hai Product collection đúng kích thước vector, khởi động API/worker rồi nhấn **Đồng bộ sản phẩm** một lần. Không cần chạy `delta_sync --bootstrap` thủ công.
 
 ## 4. Delta Sync hoạt động như thế nào
 
-Khi bấm **Chạy Delta Sync ngay** hoặc lịch tự động tới giờ:
+Khi bấm **Đồng bộ sản phẩm** và checkpoint đã tồn tại, hoặc lịch tự động tới giờ:
 
 1. API tạo một Product Sync job có `mode=existing`.
 2. Worker nhận job.
@@ -163,7 +142,7 @@ Trong cụm **Đồng bộ sản phẩm hằng ngày**, thẻ **Delta checkpoint
 4. Nhập lý do điều chỉnh.
 5. Đánh dấu xác nhận rủi ro.
 6. Nhấn **Lưu checkpoint**.
-7. Kiểm tra toast thành công rồi nhấn **Chạy Delta Sync ngay**.
+7. Kiểm tra toast thành công rồi nhấn **Đồng bộ sản phẩm**.
 
 Giao diện không cho đặt checkpoint trong tương lai và không tự chạy Delta sau khi lưu. Mỗi lần điều chỉnh thủ công được lưu vào:
 
@@ -217,9 +196,9 @@ Lần chạy sau nữa sẽ bắt đầu đọc từ:
 
 Nếu job thất bại, checkpoint vẫn giữ ở `24/09/2026 16:46:11`; lần sau hệ thống sẽ đọc lại khoảng dữ liệu chưa hoàn tất. Người vận hành không cần chỉnh checkpoint hằng ngày. Nút **Điều chỉnh checkpoint** chỉ dùng khi cần đọc lại dữ liệu cũ hoặc phục hồi sự cố.
 
-## 5. Khi nào cần Full Sync
+## 5. Khi nào cần Full Reconcile bảo trì
 
-Dùng **Đồng bộ tất cả sản phẩm ACTIVE** khi:
+Dùng mode backend `all_active` khi:
 
 - Khởi tạo Qdrant lần đầu.
 - Collection Qdrant vừa được tạo lại.
@@ -382,7 +361,7 @@ Sau đó tải lại trình duyệt bằng `Ctrl + F5`.
 
 ## 11. Xử lý lỗi thường gặp
 
-### Delta Sync chưa bootstrap
+### Chưa có checkpoint
 
 Thông báo:
 
@@ -390,16 +369,7 @@ Thông báo:
 Delta Sync chưa bootstrap trong PostgreSQL
 ```
 
-Đầu tiên kiểm tra xem Qdrant đã có baseline đầy đủ hay chưa:
-
-- Dự án hiện tại đã Full Sync: chạy bootstrap một lần, không Full Sync lại.
-- Qdrant mới hoặc trống: Full Sync trước, sau đó mới bootstrap.
-
-Lệnh bootstrap:
-
-```cmd
-.\.venv\Scripts\python.exe -m app.product_sync.delta_sync --bootstrap
-```
+Không cần bootstrap thủ công. Bảo đảm Product collections đã tồn tại, Worker đang Online và `PRODUCT_SYNC_WRITE_ENABLED=true`, sau đó nhấn **Đồng bộ sản phẩm**. Smart Sync sẽ tự Full Sync, tạo baseline và chạy Delta bù.
 
 ### Worker Offline
 
@@ -432,12 +402,11 @@ Kiểm tra:
 
 ## 12. Quy trình vận hành chính thức
 
-Thiết lập cho dự án hiện tại đã Full Sync:
+Thiết lập cho dự án đã có checkpoint:
 
 ```text
 Tạo bảng PostgreSQL
 → Kiểm tra product_delta_state
-→ Chỉ bootstrap nếu chưa có checkpoint
 → Bật lịch Delta
 → Bật lịch Inventory nếu cần
 ```
@@ -446,8 +415,9 @@ Thiết lập cho Qdrant mới hoặc trống:
 
 ```text
 Tạo bảng PostgreSQL
-→ Full Sync tất cả ACTIVE
-→ Bootstrap Delta một lần
+→ Tạo Product collections Qdrant
+→ Nhấn Đồng bộ sản phẩm
+→ Smart Sync tự chạy Full Sync + Delta bù + checkpoint
 → Bật lịch Delta
 → Bật lịch Inventory nếu cần
 ```
@@ -464,7 +434,7 @@ Worker chạy liên tục
 Khôi phục khi dữ liệu có vấn đề:
 
 ```text
-Chạy Full Sync tất cả ACTIVE
+Chạy mode bảo trì all_active qua API/backend
 → Kiểm tra hoàn tất
-→ Chỉ bootstrap lại nếu chủ động muốn thiết lập một baseline Delta mới
+→ Giữ checkpoint hiện tại; chỉ điều chỉnh checkpoint khi có lý do phục hồi rõ ràng
 ```

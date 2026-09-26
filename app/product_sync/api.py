@@ -55,7 +55,10 @@ def create_product_sync_router(admin_dependency):
     ):
         state = repo.checkpoint_status()
         if state is None:
-            raise HTTPException(409, "Delta Sync chưa bootstrap")
+            raise HTTPException(
+                409,
+                "Product Sync chưa khởi tạo; hãy nhấn Đồng bộ sản phẩm lần đầu.",
+            )
         return state
 
     @router.put("/checkpoint")

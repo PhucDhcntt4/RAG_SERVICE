@@ -59,6 +59,7 @@ class InventorySyncRepository:
                     last_trigger VARCHAR(20) NOT NULL DEFAULT '',
                     last_started_at TIMESTAMPTZ,
                     last_success_at TIMESTAMPTZ,
+                    inventory_checkpoint_at TIMESTAMPTZ,
                     last_finished_at TIMESTAMPTZ,
                     retry_after_at TIMESTAMPTZ,
                     last_checked_products INTEGER NOT NULL DEFAULT 0,
@@ -82,6 +83,12 @@ class InventorySyncRepository:
                 """,
                 (default_enabled, default_interval),
             )
+            conn.execute(
+                """
+                ALTER TABLE rag_metadata.product_inventory_sync_state
+                ADD COLUMN IF NOT EXISTS inventory_checkpoint_at TIMESTAMPTZ
+                """
+            )
 
             conn.execute(
                 """
@@ -91,6 +98,10 @@ class InventorySyncRepository:
                         CHECK (trigger_type IN ('manual', 'scheduled')),
                     status VARCHAR(20) NOT NULL
                         CHECK (status IN ('running', 'completed', 'failed')),
+                    sync_mode VARCHAR(20) NOT NULL DEFAULT 'full'
+                        CHECK (sync_mode IN ('full', 'delta')),
+                    window_start_at TIMESTAMPTZ,
+                    window_end_at TIMESTAMPTZ,
 
                     shopify_products INTEGER NOT NULL DEFAULT 0,
                     shopify_variants INTEGER NOT NULL DEFAULT 0,
@@ -108,6 +119,25 @@ class InventorySyncRepository:
                     finished_at TIMESTAMPTZ,
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
+                """
+            )
+            conn.execute(
+                """
+                ALTER TABLE rag_metadata.product_inventory_sync_runs
+                ADD COLUMN IF NOT EXISTS sync_mode VARCHAR(20) NOT NULL DEFAULT 'full'
+                CHECK (sync_mode IN ('full', 'delta'))
+                """
+            )
+            conn.execute(
+                """
+                ALTER TABLE rag_metadata.product_inventory_sync_runs
+                ADD COLUMN IF NOT EXISTS window_start_at TIMESTAMPTZ
+                """
+            )
+            conn.execute(
+                """
+                ALTER TABLE rag_metadata.product_inventory_sync_runs
+                ADD COLUMN IF NOT EXISTS window_end_at TIMESTAMPTZ
                 """
             )
 
@@ -312,12 +342,38 @@ class InventorySyncRepository:
                 result["run_id"] = run["id"]
                 return result
 
+    def set_run_window(
+        self,
+        run_id: int,
+        *,
+        sync_mode: str,
+        window_start_at,
+        window_end_at,
+    ):
+        if sync_mode not in {"full", "delta"}:
+            raise ValueError("sync_mode must be full or delta")
+        with self.connection() as conn:
+            updated = conn.execute(
+                """
+                UPDATE rag_metadata.product_inventory_sync_runs
+                SET sync_mode=%s,
+                    window_start_at=%s,
+                    window_end_at=%s,
+                    updated_at=NOW()
+                WHERE id=%s
+                """,
+                (sync_mode, window_start_at, window_end_at, int(run_id)),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError(f"Không tìm thấy Inventory Sync run #{run_id}")
+
     def complete(
         self,
         stats: dict,
         *,
         run_id: int | None = None,
         report_path: str = "",
+        checkpoint_at=None,
     ):
         with self.connection() as conn:
             row = conn.execute(
@@ -325,6 +381,7 @@ class InventorySyncRepository:
                 UPDATE rag_metadata.product_inventory_sync_state
                 SET running=FALSE,
                     last_success_at=NOW(),
+                    inventory_checkpoint_at=%s,
                     last_finished_at=NOW(),
                     retry_after_at=NULL,
                     last_checked_products=%s,
@@ -339,6 +396,7 @@ class InventorySyncRepository:
                 RETURNING *
                 """,
                 (
+                    checkpoint_at,
                     int(stats.get("checked_products") or 0),
                     int(stats.get("updated_products") or 0),
                     int(stats.get("checked_variants") or 0),
@@ -353,6 +411,9 @@ class InventorySyncRepository:
                     """
                     UPDATE rag_metadata.product_inventory_sync_runs
                     SET status='completed',
+                        sync_mode=%s,
+                        window_start_at=%s,
+                        window_end_at=%s,
                         shopify_products=%s,
                         shopify_variants=%s,
                         skipped_without_code=%s,
@@ -369,6 +430,9 @@ class InventorySyncRepository:
                     WHERE id=%s
                     """,
                     (
+                        str(stats.get("sync_mode") or "full"),
+                        stats.get("window_start_at"),
+                        stats.get("window_end_at"),
                         int(stats.get("shopify_products") or 0),
                         int(stats.get("shopify_variants") or 0),
                         int(stats.get("skipped_without_code") or 0),

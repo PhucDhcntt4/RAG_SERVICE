@@ -4,13 +4,20 @@ import json
 import logging
 import os
 import time
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from dotenv import dotenv_values
 
 from app.config import ROOT, Settings
-from app.product_sync.delta_sync import run_delta
+from app.product_sync.delta_state_repository import ProductDeltaStateRepository
+from app.product_sync.delta_sync import (
+    activate_baseline,
+    collect_baseline,
+    iso_z,
+    parse_iso,
+    run_delta,
+)
 from app.product_sync.execute_sync import SyncExecutor, load_groups, write_enabled
 from app.product_sync.repository import ProductSyncRepository
 from app.product_sync.inventory_repository import InventorySyncRepository
@@ -24,6 +31,7 @@ from app.product_sync.shopify_client import (
 
 logger = logging.getLogger("rag_service.product_sync.worker")
 SCHEDULED_DELTA_OVERLAP_SECONDS = 120
+INVENTORY_DELTA_OVERLAP_SECONDS = 120
 
 
 def configure_logging(level):
@@ -62,6 +70,21 @@ def write_job_report(job_id: int, payload: dict):
     return path
 
 
+def delta_stats(result: dict) -> dict:
+    return {
+        "total_products": int(result["changed_products"]),
+        "selected_products": int(result["affected_products"]),
+        "processed_products": int(result["processed_products"]),
+        "skipped_products": int(result["skipped_products"]),
+        "failed_products": 0,
+        "created_products": int(result["created_products"]),
+        "updated_products": int(result["updated_products"]),
+        "inactivated_products": int(result["inactivated_products"]),
+        "new_embeddings": int(result["new_embeddings"]),
+        "removed_image_points": int(result["removed_image_points"]),
+    }
+
+
 def run_delta_job(
     job: dict,
     settings,
@@ -87,17 +110,7 @@ def run_delta_job(
         audit_callback=lambda change: jobs.save_product_change(job_id, change),
     )
 
-    progress = {
-        "total_products": int(result["changed_products"]),
-        "selected_products": int(result["affected_products"]),
-        "processed_products": int(result["processed_products"]),
-        "skipped_products": int(result["skipped_products"]),
-        "created_products": int(result["created_products"]),
-        "updated_products": int(result["updated_products"]),
-        "inactivated_products": int(result["inactivated_products"]),
-        "new_embeddings": int(result["new_embeddings"]),
-        "removed_image_points": int(result["removed_image_points"]),
-    }
+    progress = delta_stats(result)
     progress["message"] = (
         "Delta Sync completed. "
         f"changed={progress['total_products']}; "
@@ -122,22 +135,16 @@ def run_delta_job(
     )
 
 
-def run_job(job: dict, settings, jobs: ProductSyncRepository, instance_id: str):
+def run_full_sync_job(
+    job: dict,
+    settings,
+    jobs: ProductSyncRepository,
+    instance_id: str,
+    *,
+    finalize: bool,
+):
     job_id = int(job["id"])
     apply = not bool(job["dry_run"])
-
-    if apply and not write_enabled():
-        jobs.fail(
-            job_id,
-            "PRODUCT_SYNC_WRITE_ENABLED=false; worker từ chối ghi Qdrant.",
-        )
-        return
-
-    # mode=existing is the incremental path for both scheduled jobs and the
-    # manual "Chạy Delta Sync ngay" action. all_active remains full reconcile.
-    if job["mode"] == "existing":
-        run_delta_job(job, settings, jobs, instance_id)
-        return
 
     executor = SyncExecutor(settings, apply=apply)
     status_client = ShopifyClient(ShopifyConfig.load())
@@ -165,14 +172,11 @@ def run_job(job: dict, settings, jobs: ProductSyncRepository, instance_id: str):
         active_codes = set(groups)
         existing_codes = set(existing)
 
-        if job["mode"] == "existing":
-            active_target = sorted(active_codes & existing_codes)
-            inactive_target = sorted(existing_codes - active_codes)
-            skipped_groups = len(active_codes - existing_codes)
-        else:
-            active_target = sorted(active_codes)
-            inactive_target = sorted(existing_codes - active_codes)
-            skipped_groups = 0
+        # This function is the explicit Full Reconcile path. It always creates
+        # every ACTIVE Shopify product and reconciles products no longer ACTIVE.
+        active_target = sorted(active_codes)
+        inactive_target = sorted(existing_codes - active_codes)
+        skipped_groups = 0
 
         combined = [
             ("active", code) for code in active_target
@@ -354,7 +358,8 @@ def run_job(job: dict, settings, jobs: ProductSyncRepository, instance_id: str):
             f"removed_image_points={stats['removed_image_points']}; report={report_path}"
         )
 
-        jobs.complete(job_id, **stats, message=message)
+        if finalize:
+            jobs.complete(job_id, **stats, message=message)
 
         logger.info(
             "Sync job completed job_id=%s processed=%s created=%s updated=%s "
@@ -369,9 +374,199 @@ def run_job(job: dict, settings, jobs: ProductSyncRepository, instance_id: str):
             stats["removed_image_points"],
         )
 
+        return {
+            "stats": stats,
+            "failures": failures,
+            "report_path": str(report_path),
+            "message": message,
+        }
+
     finally:
         status_client.close()
         executor.close()
+
+
+def merge_initial_sync_stats(full_stats: dict, delta_result: dict) -> dict:
+    delta = delta_stats(delta_result)
+    return {
+        "total_products": int(full_stats["total_products"]),
+        "selected_products": (
+            int(full_stats["selected_products"])
+            + int(delta["selected_products"])
+        ),
+        "processed_products": (
+            int(full_stats["processed_products"])
+            + int(delta["processed_products"])
+        ),
+        "skipped_products": (
+            int(full_stats["skipped_products"])
+            + int(delta["skipped_products"])
+        ),
+        "failed_products": 0,
+        "created_products": (
+            int(full_stats["created_products"])
+            + int(delta["created_products"])
+        ),
+        "updated_products": (
+            int(full_stats["updated_products"])
+            + int(delta["updated_products"])
+        ),
+        "inactivated_products": (
+            int(full_stats["inactivated_products"])
+            + int(delta["inactivated_products"])
+        ),
+        "new_embeddings": (
+            int(full_stats["new_embeddings"])
+            + int(delta["new_embeddings"])
+        ),
+        "removed_image_points": (
+            int(full_stats["removed_image_points"])
+            + int(delta["removed_image_points"])
+        ),
+    }
+
+
+def run_smart_sync_job(
+    job: dict,
+    settings,
+    jobs: ProductSyncRepository,
+    instance_id: str,
+):
+    job_id = int(job["id"])
+    apply = not bool(job["dry_run"])
+    state = ProductDeltaStateRepository(settings)
+    state.initialize()
+
+    if state.checkpoint_status() is not None:
+        logger.info("Smart Sync selected Delta job_id=%s", job_id)
+        run_delta_job(job, settings, jobs, instance_id)
+        return
+
+    if job.get("trigger_type") == "scheduled":
+        raise RuntimeError(
+            "Product Sync chưa được khởi tạo. Hãy chạy Đồng bộ sản phẩm "
+            "thủ công lần đầu."
+        )
+
+    logger.info("Smart Sync selected initial Full Sync job_id=%s", job_id)
+    jobs.update_progress(
+        job_id,
+        total_products=0,
+        selected_products=0,
+        processed_products=0,
+        skipped_products=0,
+        message="Lần đầu đồng bộ: đang tạo Shopify baseline...",
+    )
+    baseline = collect_baseline(
+        settings,
+        progress=lambda: jobs.heartbeat(instance_id, job_id),
+    )
+    if not baseline["mapping"]:
+        raise RuntimeError(
+            "Không tạo được Shopify ID → SKU mapping; chưa chạy Full Sync."
+        )
+    jobs.update_progress(
+        job_id,
+        total_products=0,
+        selected_products=0,
+        processed_products=0,
+        skipped_products=0,
+        message=(
+            "Đã đọc baseline Shopify "
+            f"({len(baseline['mapping'])} mapping). "
+            "Đang Full Sync toàn bộ sản phẩm ACTIVE..."
+        ),
+    )
+
+    full_result = run_full_sync_job(
+        job,
+        settings,
+        jobs,
+        instance_id,
+        finalize=False,
+    )
+    failures = full_result["failures"]
+    if failures:
+        raise RuntimeError(
+            f"Full Sync lỗi {len(failures)} sản phẩm; checkpoint chưa được tạo."
+        )
+    if int(full_result["stats"]["total_products"]) <= 0:
+        raise RuntimeError(
+            "Full Sync không nhận được sản phẩm ACTIVE; checkpoint chưa được tạo."
+        )
+
+    # A dry-run may preview the initial Full Sync, but must never make Delta
+    # ready or publish a checkpoint.
+    if not apply:
+        jobs.complete(
+            job_id,
+            **full_result["stats"],
+            message="Dry-run Full Sync hoàn tất; checkpoint không thay đổi.",
+        )
+        return
+
+    activate_baseline(settings, baseline)
+    jobs.update_progress(
+        job_id,
+        **full_result["stats"],
+        message="Full Sync hoàn tất. Đang chạy Delta bù từ baseline...",
+    )
+    logger.info(
+        "Initial baseline activated job_id=%s mapped_products=%s cutoff=%s",
+        job_id,
+        len(baseline["mapping"]),
+        baseline["cutoff"],
+    )
+
+    delta_result = run_delta(
+        settings,
+        apply=True,
+        overlap_seconds=SCHEDULED_DELTA_OVERLAP_SECONDS,
+        progress=lambda: jobs.heartbeat(instance_id, job_id),
+        audit_callback=lambda change: jobs.save_product_change(job_id, change),
+    )
+    combined = merge_initial_sync_stats(full_result["stats"], delta_result)
+    message = (
+        "Khởi tạo Product RAG hoàn tất: Full Sync ACTIVE và Delta bù "
+        f"thành công; mapped={len(baseline['mapping'])}; "
+        f"delta_changed={delta_result['changed_products']}; "
+        f"report={full_result['report_path']}"
+    )
+    jobs.complete(job_id, **combined, message=message)
+    logger.info(
+        "Smart Sync initialization completed job_id=%s mapped=%s "
+        "delta_changed=%s checkpoint_updated=%s",
+        job_id,
+        len(baseline["mapping"]),
+        delta_result["changed_products"],
+        delta_result["checkpoint_updated"],
+    )
+
+
+def run_job(job: dict, settings, jobs: ProductSyncRepository, instance_id: str):
+    job_id = int(job["id"])
+    apply = not bool(job["dry_run"])
+
+    if apply and not write_enabled():
+        jobs.fail(
+            job_id,
+            "PRODUCT_SYNC_WRITE_ENABLED=false; worker từ chối ghi Qdrant.",
+        )
+        return
+
+    # existing remains the stored/API value for backward compatibility. Its
+    # behavior is Smart Sync: initialize once, then use Delta thereafter.
+    if job["mode"] == "existing":
+        run_smart_sync_job(job, settings, jobs, instance_id)
+        return
+
+    run_full_sync_job(
+        job,
+        settings,
+        jobs,
+        instance_id,
+        finalize=True,
+    )
 
 
 def run_inventory_job(
@@ -393,7 +588,41 @@ def run_inventory_job(
     )
     executor = InventorySyncExecutor(settings, apply=True)
     try:
-        stats = executor.run(progress=lambda: jobs.heartbeat(instance_id, None))
+        cutoff = parse_iso(
+            inventory_claim.get("last_started_at") or datetime.now(UTC)
+        )
+        checkpoint = inventory_claim.get("inventory_checkpoint_at")
+        if checkpoint is None:
+            sync_mode = "full"
+            window_start_at = None
+            start_text = None
+        else:
+            sync_mode = "delta"
+            window_start_at = parse_iso(checkpoint) - timedelta(
+                seconds=INVENTORY_DELTA_OVERLAP_SECONDS
+            )
+            start_text = iso_z(window_start_at)
+        cutoff_text = iso_z(cutoff)
+
+        inventory.set_run_window(
+            run_id,
+            sync_mode=sync_mode,
+            window_start_at=window_start_at,
+            window_end_at=cutoff,
+        )
+        logger.info(
+            "Inventory sync window run_id=%s mode=%s start=%s end=%s",
+            run_id,
+            sync_mode,
+            start_text,
+            cutoff_text,
+        )
+        stats = executor.run(
+            progress=lambda: jobs.heartbeat(instance_id, None),
+            updated_after=start_text,
+            updated_before=cutoff_text if start_text else None,
+        )
+        stats["window_end_at"] = cutoff_text
         change_details = stats.pop("_change_details", [])
         inventory.save_changes(run_id, change_details)
         report_path = write_inventory_report(stats, apply=True)
@@ -401,11 +630,19 @@ def run_inventory_job(
             stats,
             run_id=run_id,
             report_path=str(report_path),
+            checkpoint_at=cutoff,
         )
         logger.info(
-            "Inventory sync completed trigger=%s checked_products=%s updated_products=%s "
-            "checked_variants=%s changed_variants=%s missing_products=%s missing_variants=%s report=%s",
+            "Inventory sync completed trigger=%s mode=%s window_start=%s window_end=%s "
+            "changed_shopify_products=%s affected_codes=%s checked_products=%s "
+            "updated_products=%s checked_variants=%s changed_variants=%s "
+            "missing_products=%s missing_variants=%s report=%s",
             trigger_name,
+            stats["sync_mode"],
+            stats["window_start_at"],
+            stats["window_end_at"],
+            stats["changed_shopify_products"],
+            stats["affected_codes"],
             stats["checked_products"],
             stats["updated_products"],
             stats["checked_variants"],

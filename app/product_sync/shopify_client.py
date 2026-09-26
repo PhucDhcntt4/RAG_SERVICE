@@ -136,6 +136,7 @@ query InventorySyncPage($first: Int!, $after: String, $query: String!) {
       id
       legacyResourceId
       status
+      updatedAt
 
       variants(first: 100) {
         nodes {
@@ -329,6 +330,37 @@ class ShopifyClient:
         """Load the minimal ACTIVE product fields needed by Inventory Sync."""
         yield from self._iter_products(
             "status:active",
+            graphql_query=INVENTORY_PRODUCTS_QUERY,
+            page_size=min(max(int(page_size), 1), 100),
+        )
+
+    def iter_updated_inventory_products(
+        self,
+        updated_after: str,
+        updated_before: str,
+        page_size: int = 100,
+    ) -> Iterator[dict]:
+        """Load ACTIVE products changed inside an inventory sync window."""
+        query = (
+            "status:active "
+            f"updated_at:>'{updated_after}' "
+            f"updated_at:<='{updated_before}'"
+        )
+        yield from self._iter_products(
+            query,
+            graphql_query=INVENTORY_PRODUCTS_QUERY,
+            page_size=min(max(int(page_size), 1), 100),
+        )
+
+    def iter_inventory_products_by_sku(
+        self,
+        sku: str,
+        page_size: int = 100,
+    ) -> Iterator[dict]:
+        """Reload the complete lightweight inventory group for one SKU."""
+        escaped = escape_shopify_search(sku)
+        yield from self._iter_products(
+            f'sku:"{escaped}"',
             graphql_query=INVENTORY_PRODUCTS_QUERY,
             page_size=min(max(int(page_size), 1), 100),
         )

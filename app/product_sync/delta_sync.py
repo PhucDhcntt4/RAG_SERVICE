@@ -262,12 +262,14 @@ def apply_nonactive_status(
     }
 
 
-def bootstrap(settings: Settings):
-    """Create the PostgreSQL baseline map and checkpoint."""
+def collect_baseline(
+    settings: Settings,
+    *,
+    progress: Callable[[], None] | None = None,
+) -> dict:
+    """Read a Delta baseline without publishing its checkpoint yet."""
     cutoff = utc_now()
     client = ShopifyClient(ShopifyConfig.load())
-    state_repository = ProductDeltaStateRepository(settings)
-    state_repository.initialize()
     mapping: dict[str, str] = {}
     loaded = 0
 
@@ -280,18 +282,40 @@ def bootstrap(settings: Settings):
                 mapping[product_id] = code
             if loaded % 500 == 0:
                 print(f"Bootstrap loaded: {loaded}")
+                if progress is not None:
+                    progress()
     finally:
         client.close()
 
+    if progress is not None:
+        progress()
+
+    return {
+        "cutoff": cutoff,
+        "mapping": mapping,
+        "loaded_products": loaded,
+    }
+
+
+def activate_baseline(settings: Settings, baseline: dict):
+    """Publish a collected baseline after the initial Full Sync succeeds."""
+    state_repository = ProductDeltaStateRepository(settings)
+    state_repository.initialize()
     state_repository.replace_state(
-        last_success_at=cutoff,
-        product_map=mapping,
+        last_success_at=baseline["cutoff"],
+        product_map=baseline["mapping"],
     )
+
+
+def bootstrap(settings: Settings):
+    """Create the PostgreSQL baseline map and checkpoint from the CLI."""
+    baseline = collect_baseline(settings)
+    activate_baseline(settings, baseline)
 
     print()
     print("DELTA SYNC POSTGRESQL BOOTSTRAP OK")
-    print(f"Products mapped : {len(mapping)}")
-    print(f"last_success_at : {iso_z(cutoff)}")
+    print(f"Products mapped : {len(baseline['mapping'])}")
+    print(f"last_success_at : {iso_z(baseline['cutoff'])}")
 
 
 def run_delta(

@@ -195,6 +195,10 @@
   flex-wrap: wrap;
 }
 
+#sync-refresh {
+  margin-left: auto;
+}
+
 .sync-job-card {
   margin-top: 20px;
   padding: 20px 22px;
@@ -410,6 +414,10 @@
   .sync-actions {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  #sync-refresh {
+    margin-left: 0;
   }
 }
 
