@@ -34,17 +34,32 @@ class SearchRequest(InputModel):
         return self
 
 
+class SourceAsset(BaseModel):
+    id: int
+    asset_type: str
+    page_number: int
+    width: int
+    height: int
+    bbox: list[float]
+    media_type: str
+    url: str
+    caption: str | None = None
+
+
 class Source(BaseModel):
+    document_id: int | None = None
     source_key: str
     title: str
     category: str
     heading: str | None = None
+    section_path: list[str] = Field(default_factory=list)
     chunk_index: int
     similarity: float | None = None
     bm25_score: float | None = None
     rrf_score: float | None = None
     bm25_rank: int | None = None
     vector_rank: int | None = None
+    assets: list[SourceAsset] = Field(default_factory=list)
 
 
 class SearchResponse(BaseModel):

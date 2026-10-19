@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import hashlib
 
 import pymupdf
 
@@ -26,11 +27,22 @@ class PdfLine:
 
 
 @dataclass(frozen=True)
+class PdfImage:
+    page: int
+    bbox: tuple[float, float, float, float]
+    width: int
+    height: int
+    digest: str
+    png_data: bytes
+
+
+@dataclass(frozen=True)
 class PdfExtraction:
     lines: tuple[PdfLine, ...]
     page_count: int
     pages_without_text: tuple[int, ...]
     tables: tuple[PdfTable, ...] = ()
+    images: tuple[PdfImage, ...] = ()
 
 
 def extract_pdf(
@@ -50,6 +62,8 @@ def extract_pdf(
     pages_without_text = []
     total_chars = 0
     tables = []
+    image_candidates = []
+    total_image_bytes = 0
 
     # Đọc chữ và định dạng, không lấy dữ liệu ảnh nhúng.
     flags = (
@@ -129,15 +143,75 @@ def extract_pdf(
             else:
                 tables.extend(extract_tables(page, page_number))
 
+            # Render each placed raster image from its page rectangle. Rendering
+            # the clip also handles masks and transparency consistently.
+            seen_rectangles = set()
+            for image_info in page.get_image_info(hashes=True, xrefs=True):
+                if len(image_candidates) >= 200 or total_image_bytes >= 40 * 1024 * 1024:
+                    break
+                bbox = tuple(float(value) for value in image_info.get("bbox", ()))
+                if len(bbox) != 4:
+                    continue
+                rect_key = tuple(round(value, 2) for value in bbox)
+                if rect_key in seen_rectangles:
+                    continue
+                seen_rectangles.add(rect_key)
+                width = int(image_info.get("width") or 0)
+                height = int(image_info.get("height") or 0)
+                area = max(0.0, bbox[2] - bbox[0]) * max(0.0, bbox[3] - bbox[1])
+                page_area = max(1.0, float(page.rect.width * page.rect.height))
+                # Ignore tiny icons, bullets and tracking pixels.
+                if width < 64 or height < 64 or area / page_area < 0.005:
+                    continue
+                digest_value = image_info.get("digest")
+                digest = (
+                    bytes(digest_value).hex()
+                    if isinstance(digest_value, (bytes, bytearray))
+                    else hashlib.sha256(
+                        repr((page_number, rect_key, width, height)).encode()
+                    ).hexdigest()
+                )
+                pixmap = page.get_pixmap(
+                    matrix=pymupdf.Matrix(1.5, 1.5),
+                    clip=pymupdf.Rect(bbox),
+                    alpha=False,
+                    colorspace=pymupdf.csRGB,
+                )
+                png_data = pixmap.tobytes("png")
+                if total_image_bytes + len(png_data) > 40 * 1024 * 1024:
+                    continue
+                image_candidates.append(PdfImage(
+                    page=page_number,
+                    bbox=bbox,
+                    width=pixmap.width,
+                    height=pixmap.height,
+                    digest=digest,
+                    png_data=png_data,
+                ))
+                total_image_bytes += len(png_data)
+
     if not lines:
         raise ValueError(
             "Không đọc được lớp chữ trong PDF. "
             "Nếu là PDF scan, cần OCR."
         )
 
+    # The same image on at least three pages is normally a logo/header/footer.
+    digest_pages = {}
+    for image in image_candidates:
+        digest_pages.setdefault(image.digest, set()).add(image.page)
+    repeated_decorations = {
+        digest for digest, pages in digest_pages.items() if len(pages) >= 3
+    }
+    images = [
+        image for image in image_candidates
+        if image.digest not in repeated_decorations
+    ][:100]
+
     return PdfExtraction(
         lines=tuple(lines),
         page_count=page_count,
         pages_without_text=tuple(pages_without_text),
         tables=tuple(tables),
+        images=tuple(images),
     )

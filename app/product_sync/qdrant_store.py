@@ -313,6 +313,18 @@ class ProductQdrantStore:
                 },
             )
 
+    def set_catalog_payload(self, point_id: int | str, payload: dict):
+        """Patch selected catalog payload fields without touching its vector."""
+        self._request(
+            "POST",
+            f"/collections/{self.catalog_collection}/points/payload",
+            params={"wait": "true"},
+            json={
+                "payload": payload,
+                "points": [point_id],
+            },
+        )
+
     def upsert_image(
         self,
         point_id: int,

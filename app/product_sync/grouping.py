@@ -204,6 +204,46 @@ class ProductGroup:
         )
         return values[0] if values else ""
 
+    @property
+    def created_at(self) -> str:
+        """Earliest Shopify creation time across every source of this SKU."""
+        values = sorted(
+            _clean(product.get("createdAt"))
+            for product in self.source_products
+            if _clean(product.get("createdAt"))
+        )
+        return values[0] if values else ""
+
+    @property
+    def published_at(self) -> str:
+        """Earliest Shopify publication time across every source of this SKU."""
+        values = sorted(
+            _clean(product.get("publishedAt"))
+            for product in self.source_products
+            if _clean(product.get("publishedAt"))
+        )
+        return values[0] if values else ""
+
+    @property
+    def new_at(self) -> str:
+        """Stable business date used by the latest-products API.
+
+        Each Shopify source contributes publishedAt when available, otherwise
+        createdAt. The product group uses the earliest source date so adding a
+        new colour/source later cannot make an old SKU appear new again.
+        """
+        values = sorted(
+            value
+            for product in self.source_products
+            if (
+                value := (
+                    _clean(product.get("publishedAt"))
+                    or _clean(product.get("createdAt"))
+                )
+            )
+        )
+        return values[0] if values else ""
+
     def summary(self) -> dict:
         variants = self.variants
         images = self.images
@@ -219,6 +259,9 @@ class ProductGroup:
             "handles": self.handles,
             "vendors": self.vendors,
             "product_types": self.product_types,
+            "created_at": self.created_at,
+            "published_at": self.published_at,
+            "new_at": self.new_at,
             "latest_updated_at": self.latest_updated_at,
             "variant_skus": _dedupe_keep_order(
                 [row["sku"] for row in variants if row["sku"]]
@@ -242,6 +285,12 @@ class ProductGroup:
                     "title": _clean(product.get("title")),
                     "handle": _clean(product.get("handle")),
                     "status": _clean(product.get("status")),
+                    "created_at": _clean(product.get("createdAt")),
+                    "published_at": _clean(product.get("publishedAt")),
+                    "new_at": (
+                        _clean(product.get("publishedAt"))
+                        or _clean(product.get("createdAt"))
+                    ),
                     "updated_at": _clean(product.get("updatedAt")),
                     "online_store_url": _clean(product.get("onlineStoreUrl")),
                     "colors": _extract_colors(product),

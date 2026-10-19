@@ -802,6 +802,10 @@
 
       $("detail-status").textContent = payload.status || detail.status || "—";
 
+      $("detail-created").textContent = formatVietnamDate(
+        payload.created_at,
+      );
+
       $("detail-updated").textContent = formatDate(
         payload.updated_at || summary.updated_at || detail.source_updated_at,
       );

@@ -8,7 +8,14 @@ from pathlib import Path, PureWindowsPath
 from app.config import ROOT
 
 logger = logging.getLogger("rag_service")
-MIME_TYPES = {".txt": "text/plain", ".md": "text/markdown", ".pdf": "application/pdf"}
+MIME_TYPES = {
+    ".txt": "text/plain",
+    ".md": "text/markdown",
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".csv": "text/csv",
+}
 
 
 class StorageError(RuntimeError):
@@ -32,7 +39,7 @@ class LocalFileStore:
     def path(self, key):
         if not isinstance(key, str):
             raise StorageError("Mã file lưu trữ không hợp lệ")
-        if re.fullmatch(r"[0-9a-f]{32}\.(txt|md|pdf)", key):
+        if re.fullmatch(r"[0-9a-f]{32}\.(txt|md|pdf|docx|xlsx|csv)", key):
             # Existing DB records still reference files in storage/documents.
             root, name = self.legacy_root, key
         elif key.startswith("named/"):
@@ -53,7 +60,7 @@ class LocalFileStore:
         name = re.sub(r'[\x00-\x1f<>:"/\\|?*]', "_", name).strip(" .")
         suffix = Path(name).suffix
         if suffix.lower() not in MIME_TYPES:
-            raise StorageError("Chỉ lưu file TXT, MD hoặc PDF")
+            raise StorageError("Chỉ lưu file TXT, MD, PDF, DOCX, XLSX hoặc CSV")
         stem = name[:-len(suffix)]
         if re.match(r"^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)", stem, re.I):
             stem = "_" + stem

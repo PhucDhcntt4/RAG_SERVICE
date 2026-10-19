@@ -149,6 +149,29 @@ def condense_part_overview(rows, scopes):
     return selected
 
 
+def build_section_outline(rows, scopes):
+    """Describe direct child headings actually available for expanded scopes."""
+    outlines = []
+    for document_id, raw_scope in scopes or ():
+        scope = tuple(raw_scope)
+        children = []
+        for row in rows:
+            if row.get("document_id") != document_id:
+                continue
+            path = tuple(row.get("section_path") or ())
+            if path[:len(scope)] != scope or len(path) <= len(scope):
+                continue
+            child = path[len(scope)]
+            if child not in children:
+                children.append(child)
+        outlines.append({
+            "document_id": str(document_id),
+            "path": list(scope),
+            "direct_children": children,
+        })
+    return outlines
+
+
 def needs_document_context(query: str) -> bool:
     """Broad questions need surrounding document evidence, across all topics."""
     value = unicodedata.normalize("NFD", query.lower()).replace("đ", "d")

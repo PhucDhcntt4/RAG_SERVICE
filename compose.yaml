@@ -42,6 +42,9 @@ services:
       - type: bind
         source: ./knowlegde
         target: /app/knowlegde
+      - type: bind
+        source: ./storage
+        target: /app/storage
     security_opt:
       - no-new-privileges:true
     cap_drop:

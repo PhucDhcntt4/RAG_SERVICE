@@ -270,6 +270,14 @@ Thêm dữ liệu thử (không phải chính sách thật), dùng `PUT /api/v1/
 
 Upload dùng multipart: `file`, `source_key`, `title`, `category`. TXT/MD cần UTF-8; PDF cần lớp text, không mã hóa, tối đa 200 trang, chưa có OCR. Lưu text đã trích xuất và metadata trong DB, đồng thời giữ nguyên byte file gốc trong `knowlegde`. File giới hạn mặc định 10 MB, văn bản 200.000 ký tự/300 chunks. Tài liệu lớn cần tách nhỏ. Import hiện chạy đồng bộ trong request, chưa có hàng đợi/background job bền vững; reverse proxy/client upload cần timeout đủ dài. Không retry upload liên tục khi timeout mà chưa kiểm tra kết quả bằng GET.
 
+### Ảnh trong PDF
+
+- PDF có lớp text được xử lý theo hai nhánh: text tiếp tục đi qua heading/chunk/embedding; raster image được crop thành PNG và gắn với heading gần nhất phía trước trong thứ tự đọc.
+- Metadata nằm trong `rag_metadata.document_assets`; file PNG nằm trong `storage/document_assets/<document_id>`.
+- `sources[].assets` của API search/chat trả `page_number`, `bbox`, kích thước và URL. Client tải URL bằng cùng Bearer key đã dùng cho search/chat.
+- Logo/header/footer lặp trên từ ba trang và ảnh quá nhỏ bị bỏ qua. Bản này chưa OCR, chưa lập chỉ mục nội dung chỉ tồn tại bên trong ảnh và chưa trích vector drawing.
+- Chạy `.\\.venv\\Scripts\\python.exe -m app.init_db --confirm` một lần sau khi nâng cấp. App cũng tự `CREATE TABLE IF NOT EXISTS` khi khởi động.
+
 ## Lưu file trên máy chủ
 
 - File giữ nguyên tên và đuôi khi hợp lệ trên Windows, ví dụ `knowlegde/CuaHang_Dong_Hai.txt`. File trùng tên sẽ được lưu thành `CuaHang_Dong_Hai (2).txt`, `(3)`... để không ghi đè tài liệu khác. Tên quá dài được rút gọn. Mỗi bản upload được lưu riêng trước khi DB cập nhật thành công; cập nhật cùng `source_key` sẽ xóa bản file trước đó sau commit.

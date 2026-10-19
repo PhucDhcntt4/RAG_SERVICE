@@ -18,6 +18,7 @@ def prepare_pdf_document(
         raise ValueError("Invalid chunk size or overlap")
     lines = list(extraction.lines)
     markers = {}
+    image_markers = {}
     if extraction.tables:
         lines = [line for line in lines
                  if not any(inside_table(line, table) for table in extraction.tables)]
@@ -25,11 +26,19 @@ def prepare_pdf_document(
             marker = PdfLine("", table.page, -index - 1, table.bbox, 0, 0, ())
             lines.append(marker)
             markers[(table.page, marker.block_id)] = table
-        lines.sort(key=lambda line: (line.page, line.bbox[1], line.bbox[0]))
+    # Images participate in reading order even though they do not contribute
+    # text lines. This lets image-only sections produce a searchable chunk.
+    for index, image in enumerate(extraction.images):
+        block_id = -10_000 - index
+        marker = PdfLine("", image.page, block_id, image.bbox, 0, 0, ())
+        lines.append(marker)
+        image_markers[(image.page, block_id)] = image
+    lines.sort(key=lambda line: (line.page, line.bbox[1], line.bbox[0]))
     detected = detect_headings(replace(extraction, lines=tuple(lines)))
     if not detected:
         detected = [DetectedLine(line, None, "body") for line in lines]
     chunks, stack, body_lines, source = [], [], [], []
+    section_images = []
     previous_table = None
     table_heading = ""
     text_since_table = False
@@ -41,6 +50,14 @@ def prepare_pdf_document(
     def flush_section():
         content = "\n".join(body_lines).strip()
         path = tuple(title for _, title in stack)
+        if not content and section_images and path:
+            pages = ", ".join(str(page) for page in sorted({
+                image.page for image in section_images
+            }))
+            content = (
+                f"Hình ảnh hoặc sơ đồ minh họa trong PDF, trang {pages}. "
+                f"Nội dung hình thuộc mục \"{path[-1].rstrip(':')}\"."
+            )
         if split_sections:
             for chunk in chunk_sections([(path, content)], size, overlap):
                 chunks.append(replace(chunk, index=len(chunks)))
@@ -52,8 +69,13 @@ def prepare_pdf_document(
                 section_path=path,
             ))
         body_lines.clear()
+        section_images.clear()
 
     for item in detected:
+        image = image_markers.get((item.line.page, item.line.block_id))
+        if image is not None:
+            section_images.append(image)
+            continue
         table = markers.get((item.line.page, item.line.block_id))
         if table is not None:
             flush_section()

@@ -1,0 +1,811 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Kho sản phẩm · Đông Hải</title>
+
+    <link rel="stylesheet" href="/assets/admin.css?v=20260921-2" />
+    <link
+      rel="stylesheet"
+      href="/assets/products-sync.css?v=20260925-smart-sync1"
+    />
+    <link rel="stylesheet" href="/assets/products.css?v=20260924-pagination1" />
+
+    <script src="/assets/products.js?v=20260925-smart-sync1" defer></script>
+  </head>
+
+  <body>
+    <aside class="sidebar">
+      <a class="brand" href="/" aria-label="Đông Hải, trang chủ">
+        <span class="brand-mark">ĐH</span>
+
+        <span>
+          ĐÔNG HẢI
+          <small>TRUNG TÂM DỮ LIỆU</small>
+        </span>
+      </a>
+
+      <div class="nav-label">KHÔNG GIAN LÀM VIỆC</div>
+
+      <a class="nav-item" href="/">
+        <span aria-hidden="true"></span> Kho tài liệu
+      </a>
+      <a class="nav-item" href="/taxonomy"
+        ><span aria-hidden="true"></span> Loại và nhóm tài liệu</a
+      >
+      <a class="nav-item selected" href="/products" aria-current="page">
+        <span aria-hidden="true"></span>
+        Sản phẩm
+      </a>
+      <div class="sidebar-note">
+        <span class="note-symbol" aria-hidden="true">✦</span>
+
+        <strong>Product RAG</strong>
+
+        <p>
+          Theo dõi dữ liệu sản phẩm và trạng thái vector được sử dụng bởi trợ
+          lý.
+        </p>
+      </div>
+
+      <div class="sidebar-footer">
+        <span class="mini-mark">ĐH</span>
+        RAG Service
+        <span class="version">v1.0</span>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <span>
+          Không gian quản trị
+          <span class="slash">/</span>
+          <strong>Kho sản phẩm</strong>
+        </span>
+
+        <span class="connection" id="connection"> Chưa kết nối </span>
+      </header>
+
+      <div class="workspace">
+        <div class="page-heading">
+          <div>
+            <div class="eyebrow">PRODUCT RAG</div>
+
+            <h1>Kho sản phẩm</h1>
+
+            <p>Theo dõi dữ liệu sản phẩm và trạng thái vector trên Qdrant.</p>
+          </div>
+        </div>
+
+        <!-- Login khi local-admin không khả dụng -->
+        <section class="login-card" id="login-panel" hidden>
+          <div class="login-icon">⌘</div>
+
+          <div class="login-content">
+            <h2>Kết nối Product RAG</h2>
+
+            <p>Nhập ADMIN_API_KEY để xem dữ liệu sản phẩm.</p>
+
+            <form id="login-form">
+              <div class="key-field">
+                <input
+                  id="admin-key"
+                  type="password"
+                  placeholder="Nhập ADMIN_API_KEY"
+                  required
+                  autocomplete="off"
+                />
+
+                <button type="button" id="toggle-key" class="key-toggle">
+                  Hiện
+                </button>
+              </div>
+
+              <button class="primary" id="connect-button">Kết nối</button>
+            </form>
+
+            <p class="field-error" id="login-error"></p>
+          </div>
+        </section>
+
+        <div
+          id="notice"
+          class="notice"
+          role="status"
+          aria-live="polite"
+          hidden
+        ></div>
+
+        <!-- Statistics -->
+        <section id="product-stats" class="product-stats" hidden>
+          <div class="product-stat">
+            <span>CATALOG</span>
+            <strong id="catalog-count">—</strong>
+            <small>Product vectors</small>
+          </div>
+
+          <div class="product-stat">
+            <span>HÌNH ẢNH</span>
+            <strong id="image-vector-count">—</strong>
+            <small>Image vectors</small>
+          </div>
+
+          <div class="product-stat">
+            <span>TRANG HIỆN TẠI</span>
+            <strong id="page-product-count">—</strong>
+            <small>Sản phẩm</small>
+          </div>
+
+          <div class="product-stat">
+            <span>AI READY</span>
+            <strong id="ready-count">—</strong>
+            <small>Sản phẩm AI có thể truy xuất</small>
+          </div>
+        </section>
+
+        <!-- Shopify / Qdrant sync -->
+        <section class="sync-panel" id="sync-panel" hidden>
+          <div class="sync-panel-heading">
+            <div>
+              <div class="eyebrow">ĐỒNG BỘ SHOPIFY</div>
+              <h2>Đồng bộ Product RAG</h2>
+              <p>Worker Terminal 2 xử lý job nền và cập nhật Qdrant.</p>
+            </div>
+
+            <div class="sync-health">
+              <span class="sync-pill" id="worker-state">Worker: —</span>
+              <span class="sync-pill" id="write-state">Qdrant write: —</span>
+              <button
+                class="sync-panel-toggle"
+                id="sync-panel-toggle"
+                type="button"
+                aria-expanded="true"
+              >
+                <svg
+                  class="sync-panel-toggle-icon"
+                  aria-hidden="true"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                >
+                  <path d="M3.5 6 8 10.5 12.5 6" />
+                </svg>
+                <span id="sync-panel-toggle-text">Thu gọn</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="sync-actions">
+            <button class="primary" type="button" id="sync-existing">
+              Đồng bộ sản phẩm
+            </button>
+            <button class="secondary" type="button" id="sync-refresh">
+              ↻ kiểm tra worker
+            </button>
+          </div>
+
+          <div class="sync-job-card">
+            <div class="sync-job-heading">
+              <div>
+                <strong id="sync-job-title">Chưa có sync job</strong>
+                <span id="sync-job-meta">—</span>
+              </div>
+              <span class="sync-status" id="sync-job-status">—</span>
+            </div>
+
+            <div class="sync-progress-track" aria-label="Tiến độ đồng bộ">
+              <div class="sync-progress-bar" id="sync-progress-bar"></div>
+            </div>
+
+            <div class="sync-metrics">
+              <div>
+                <span>TIẾN ĐỘ</span
+                ><strong id="sync-progress-text">0 / 0</strong>
+              </div>
+              <div><span>CREATE</span><strong id="sync-created">0</strong></div>
+              <div><span>UPDATE</span><strong id="sync-updated">0</strong></div>
+              <div>
+                <span>INACTIVE</span><strong id="sync-inactivated">0</strong>
+              </div>
+              <div>
+                <span>EMBED MỚI</span><strong id="sync-embeddings">0</strong>
+              </div>
+              <div><span>LỖI</span><strong id="sync-failed">0</strong></div>
+            </div>
+
+            <p class="sync-message" id="sync-job-message">
+              Worker chưa chạy job.
+            </p>
+          </div>
+
+          <div class="sync-config">
+            <div>
+              <h3>Đồng bộ sản phẩm hằng ngày</h3>
+              <p>Lịch được worker kiểm tra và chỉ tạo một job cho mỗi ngày.</p>
+            </div>
+
+            <label class="sync-toggle-row">
+              <input type="checkbox" id="auto-sync-enabled" />
+              <span>Bật đồng bộ tự động</span>
+            </label>
+
+            <label>
+              <span>Giờ chạy</span>
+              <input type="time" id="auto-sync-time" value="02:00" />
+            </label>
+
+            <label>
+              <span>Múi giờ</span>
+              <input
+                id="auto-sync-timezone"
+                value="Asia/Ho_Chi_Minh"
+                readonly
+              />
+            </label>
+
+            <button class="secondary" type="button" id="save-sync-settings">
+              Lưu lịch
+            </button>
+          </div>
+
+          <div class="delta-checkpoint-card">
+            <div>
+              <span class="delta-checkpoint-label"
+                >CHECKPOINT( thời điểm đồng bộ )</span
+              >
+              <strong id="delta-checkpoint-time">Chưa tải checkpoint</strong>
+              <p id="delta-checkpoint-detail">—</p>
+            </div>
+            <button
+              class="secondary"
+              id="adjust-delta-checkpoint"
+              type="button"
+            >
+              Điều chỉnh checkpoint
+            </button>
+          </div>
+
+          <div class="sync-history-block">
+            <div class="product-section-heading">
+              <h3>Lịch sử đồng bộ sản phẩm</h3>
+            </div>
+            <div class="table-wrap sync-history-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>JOB</th>
+                    <th>TRIGGER</th>
+                    <th>MODE</th>
+                    <th>TRẠNG THÁI</th>
+                    <th>TIẾN ĐỘ</th>
+                    <th>LỖI</th>
+                    <th>THAY ĐỔI</th>
+                    <th>THỜI GIAN</th>
+                  </tr>
+                </thead>
+                <tbody id="sync-history"></tbody>
+              </table>
+            </div>
+            <div class="history-pagination">
+              <span id="sync-history-page-info">Trang 1 / 1 · 0 bản ghi</span>
+              <div>
+                <button
+                  class="pagination-arrow"
+                  id="sync-history-previous"
+                  type="button"
+                  aria-label="Trang lịch sử sản phẩm trước"
+                >
+                  ←
+                </button>
+                <button
+                  class="pagination-arrow"
+                  id="sync-history-next"
+                  type="button"
+                  aria-label="Trang lịch sử sản phẩm sau"
+                >
+                  →
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="sync-config inventory-sync-config">
+            <div>
+              <h3>Đồng bộ tồn kho</h3>
+              <p>
+                Chỉ lấy inventory từ Shopify và cập nhật catalog Qdrant; không
+                chạy CLIP, không đụng vector ảnh.
+              </p>
+            </div>
+
+            <label class="sync-toggle-row">
+              <input type="checkbox" id="inventory-sync-enabled" />
+              <span>Bật đồng bộ tự động</span>
+            </label>
+
+            <label>
+              <span>Chu kỳ</span>
+              <select id="inventory-sync-interval">
+                <option value="1">1 giờ</option>
+                <option value="2">2 giờ</option>
+                <option value="3">3 giờ</option>
+                <option value="6">6 giờ</option>
+                <option value="12">12 giờ</option>
+                <option value="24">24 giờ</option>
+              </select>
+            </label>
+
+            <button
+              class="secondary"
+              type="button"
+              id="save-inventory-settings"
+            >
+              Lưu lịch
+            </button>
+            <button class="primary" type="button" id="inventory-sync-now">
+              Đồng bộ tồn kho ngay
+            </button>
+          </div>
+
+          <div class="inventory-sync-meta">
+            <span class="sync-pill" id="inventory-sync-state">Tồn kho: —</span>
+            <span id="inventory-sync-last">Lần cuối: —</span>
+            <span id="inventory-sync-next">Lần tiếp theo: —</span>
+            <span id="inventory-sync-stats">—</span>
+          </div>
+
+          <div class="sync-history-block inventory-history-block">
+            <div class="product-section-heading">
+              <h3>Lịch sử đồng bộ tồn kho</h3>
+            </div>
+            <div class="table-wrap sync-history-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>JOB</th>
+                    <th>TRIGGER</th>
+                    <th>MODE</th>
+                    <th>TRẠNG THÁI</th>
+                    <th>SẢN PHẨM</th>
+                    <th>BIẾN THỂ</th>
+                    <th>THAY ĐỔI</th>
+                    <th>THIẾU</th>
+                    <th>LỖI</th>
+                    <th>CHI TIẾT</th>
+                    <th>THỜI GIAN</th>
+                  </tr>
+                </thead>
+                <tbody id="inventory-sync-history"></tbody>
+              </table>
+            </div>
+            <div class="history-pagination">
+              <span id="inventory-history-page-info"
+                >Trang 1 / 1 · 0 bản ghi</span
+              >
+              <div>
+                <button
+                  class="pagination-arrow"
+                  id="inventory-history-previous"
+                  type="button"
+                  aria-label="Trang lịch sử tồn kho trước"
+                >
+                  ←
+                </button>
+                <button
+                  class="pagination-arrow"
+                  id="inventory-history-next"
+                  type="button"
+                  aria-label="Trang lịch sử tồn kho sau"
+                >
+                  →
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Product table -->
+        <section class="library" id="product-panel" hidden>
+          <div class="library-header">
+            <div>
+              <h2>
+                Tất cả sản phẩm
+                <span class="count" id="product-count"> — </span>
+              </h2>
+
+              <p id="collection-info">Dữ liệu từ Qdrant</p>
+            </div>
+
+            <div class="toolbar">
+              <div class="product-filters" aria-label="Bộ lọc sản phẩm">
+                <select
+                  class="filter-select"
+                  id="product-type-filter"
+                  aria-label="Lọc theo thể loại"
+                >
+                  <option value="">Tất cả thể loại</option>
+                </select>
+
+                <select
+                  class="filter-select"
+                  id="product-status-filter"
+                  aria-label="Lọc theo trạng thái"
+                >
+                  <option value="">Tất cả trạng thái</option>
+                </select>
+
+                <span class="product-filter-clear-slot">
+                  <button
+                    class="text-button product-filter-clear"
+                    id="product-filter-clear"
+                    type="button"
+                    hidden
+                  >
+                    Xóa lọc
+                  </button>
+                </span>
+              </div>
+
+              <form
+                class="product-search"
+                id="product-search-form"
+                role="search"
+              >
+                <span aria-hidden="true">⌕</span>
+                <input
+                  id="product-search-input"
+                  type="search"
+                  maxlength="200"
+                  autocomplete="off"
+                  placeholder="Tìm tên, mã sản phẩm, handle, SKU…"
+                  aria-label="Tìm kiếm sản phẩm"
+                />
+                <button
+                  class="text-button product-search-clear"
+                  id="product-search-clear"
+                  type="button"
+                  hidden
+                >
+                  Xóa
+                </button>
+                <button class="secondary" type="submit">Tìm kiếm</button>
+              </form>
+
+              <button class="secondary" id="table-refresh">↻ Làm mới</button>
+
+              <button class="text-button" id="disconnect" hidden>
+                Ngắt kết nối
+              </button>
+            </div>
+          </div>
+
+          <div class="state" id="loading" hidden>
+            <span class="spinner"></span>
+
+            <h3>Đang tải sản phẩm…</h3>
+          </div>
+
+          <div class="state" id="empty" hidden>
+            <div class="empty-icon">◇</div>
+
+            <h3 id="empty-title">Chưa có sản phẩm</h3>
+
+            <p id="empty-description">
+              Không tìm thấy dữ liệu trong product catalog collection.
+            </p>
+          </div>
+
+          <div class="table-wrap" id="table-wrap" hidden>
+            <table class="product-table">
+              <thead>
+                <tr>
+                  <th>SẢN PHẨM</th>
+                  <th>MÃ SP</th>
+                  <th>LOẠI</th>
+                  <th>MÀU</th>
+                  <th>VECTOR ẢNH</th>
+                  <th>TRẠNG THÁI</th>
+                  <th>AI</th>
+                  <th>
+                    <span class="sr-only"> Thao tác </span>
+                  </th>
+                </tr>
+              </thead>
+
+              <tbody id="products"></tbody>
+            </table>
+          </div>
+
+          <footer class="pagination">
+            <div class="pagination-summary">
+              Tổng sản phẩm:
+              <strong id="total-product-count">—</strong>
+              <span id="page-info">Chưa tải danh sách</span>
+            </div>
+
+            <div class="pagination-controls">
+              <button
+                class="pagination-arrow"
+                id="previous"
+                type="button"
+                aria-label="Trang trước"
+                disabled
+              >
+                ←
+              </button>
+
+              <div class="pagination-pages" id="pagination-pages"></div>
+
+              <button
+                class="pagination-arrow"
+                id="next"
+                type="button"
+                aria-label="Trang sau"
+                disabled
+              >
+                →
+              </button>
+
+              <select
+                class="pagination-size"
+                id="page-size"
+                aria-label="Số sản phẩm mỗi trang"
+              >
+                <option value="10">10 / trang</option>
+                <option value="20">20 / trang</option>
+                <option value="30" selected>30 / trang</option>
+                <option value="50">50 / trang</option>
+                <option value="100">100 / trang</option>
+              </select>
+            </div>
+          </footer>
+        </section>
+
+        <p class="bottom-note">
+          Product Catalog
+          <span>·</span>
+          Image CLIP Vectors
+          <span>·</span>
+          Qdrant
+        </p>
+      </div>
+    </main>
+
+    <!-- Delta checkpoint dialog -->
+    <dialog id="delta-checkpoint-dialog" class="delta-checkpoint-dialog">
+      <form id="delta-checkpoint-form">
+        <div class="sync-audit-heading">
+          <div>
+            <span class="eyebrow">PHỤC HỒI DELTA SYNC</span>
+            <h2>Điều chỉnh checkpoint</h2>
+            <p>
+              Delta sẽ đọc lại dữ liệu kể từ thời điểm này và tự lùi thêm 120
+              giây.
+            </p>
+          </div>
+          <button
+            class="dialog-close"
+            id="close-delta-checkpoint"
+            type="button"
+            aria-label="Đóng điều chỉnh checkpoint"
+          >
+            ×
+          </button>
+        </div>
+
+        <div class="delta-checkpoint-form-body">
+          <div class="checkpoint-warning">
+            Không đặt thời gian trong tương lai. Đặt lùi quá xa là an toàn hơn
+            nhưng Delta sẽ phải đọc nhiều dữ liệu hơn.
+          </div>
+
+          <label>
+            <span>Thời điểm bắt đầu đọc lại</span>
+            <input
+              id="delta-checkpoint-input"
+              type="datetime-local"
+              step="1"
+              required
+            />
+          </label>
+
+          <label>
+            <span>Múi giờ</span>
+            <input value="Asia/Ho_Chi_Minh (UTC+07:00)" readonly />
+          </label>
+
+          <div class="checkpoint-preview">
+            <span>Delta thực tế sẽ truy vấn từ</span>
+            <strong id="delta-checkpoint-query-preview">—</strong>
+          </div>
+
+          <label>
+            <span>Lý do điều chỉnh</span>
+            <textarea
+              id="delta-checkpoint-reason"
+              rows="3"
+              maxlength="1000"
+              placeholder="Ví dụ: Đọc lại từ thời điểm bắt đầu Full Sync"
+              required
+            ></textarea>
+          </label>
+
+          <label class="checkpoint-confirm-row">
+            <input id="delta-checkpoint-confirm" type="checkbox" required />
+            <span>
+              Tôi hiểu đặt checkpoint sai thời gian có thể làm bỏ sót dữ liệu.
+            </span>
+          </label>
+        </div>
+
+        <div class="checkpoint-dialog-actions">
+          <button class="secondary" id="cancel-delta-checkpoint" type="button">
+            Hủy
+          </button>
+          <button class="primary" id="save-delta-checkpoint" type="submit">
+            Lưu checkpoint
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- Sync audit dialog -->
+    <dialog id="sync-audit-dialog" class="sync-audit-dialog">
+      <div class="sync-audit-heading">
+        <div>
+          <span class="eyebrow" id="sync-audit-eyebrow">LỊCH SỬ THAY ĐỔI</span>
+          <h2 id="sync-audit-title">Chi tiết đồng bộ</h2>
+          <p id="sync-audit-summary">—</p>
+        </div>
+        <button
+          class="dialog-close"
+          id="close-sync-audit"
+          type="button"
+          aria-label="Đóng chi tiết thay đổi"
+        >
+          ×
+        </button>
+      </div>
+
+      <div class="sync-audit-list" id="sync-audit-list"></div>
+
+      <div class="history-pagination sync-audit-pagination">
+        <span id="sync-audit-page-info">Trang 1 / 1 · 0 thay đổi</span>
+        <div>
+          <button
+            class="pagination-arrow"
+            id="sync-audit-previous"
+            type="button"
+            aria-label="Trang chi tiết trước"
+          >
+            ←
+          </button>
+          <button
+            class="pagination-arrow"
+            id="sync-audit-next"
+            type="button"
+            aria-label="Trang chi tiết sau"
+          >
+            →
+          </button>
+        </div>
+      </div>
+    </dialog>
+
+    <!-- Detail dialog -->
+    <dialog id="product-dialog" class="product-dialog">
+      <div class="dialog-heading">
+        <div>
+          <div class="eyebrow">PRODUCT DETAIL</div>
+
+          <h2 id="detail-title">Chi tiết sản phẩm</h2>
+
+          <p class="preview-meta" id="detail-meta"></p>
+        </div>
+
+        <button
+          type="button"
+          class="icon-button"
+          id="close-detail"
+          aria-label="Đóng"
+        >
+          ×
+        </button>
+      </div>
+
+      <div id="detail-loading" class="product-detail-loading" hidden>
+        <span class="spinner"></span>
+        Đang tải sản phẩm…
+      </div>
+
+      <div id="product-detail">
+        <section class="product-detail-overview">
+          <div class="product-main-image-wrap">
+            <img id="detail-image" class="product-main-image" alt="" hidden />
+
+            <div id="detail-no-image" class="product-no-image">◇</div>
+          </div>
+
+          <div class="product-info-grid">
+            <div>
+              <span>Mã sản phẩm</span>
+              <strong id="detail-code">—</strong>
+            </div>
+
+            <div>
+              <span>Thương hiệu</span>
+              <strong id="detail-vendor">—</strong>
+            </div>
+
+            <div>
+              <span>Loại sản phẩm</span>
+              <strong id="detail-type">—</strong>
+            </div>
+
+            <div>
+              <span>Chất liệu</span>
+              <strong id="detail-material">—</strong>
+            </div>
+
+            <div>
+              <span>Trạng thái</span>
+              <strong id="detail-status">—</strong>
+            </div>
+
+            <div>
+              <span>Thời gian tạo sản phẩm</span>
+              <strong id="detail-created">—</strong>
+            </div>
+
+            <div>
+              <span>Cập nhật</span>
+              <strong id="detail-updated">—</strong>
+            </div>
+          </div>
+        </section>
+
+        <section class="product-detail-section">
+          <h3>Mô tả</h3>
+
+          <p id="detail-description" class="product-description">—</p>
+        </section>
+
+        <section class="product-detail-section">
+          <div class="product-section-heading">
+            <h3>Biến thể</h3>
+
+            <span class="count" id="variant-count"> 0 </span>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>SKU</th>
+                  <th>MÀU</th>
+                  <th>SIZE</th>
+                  <th>GIÁ</th>
+                  <th>TỒN KHO</th>
+                  <th>TRẠNG THÁI</th>
+                </tr>
+              </thead>
+
+              <tbody id="variants"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="product-detail-section">
+          <div class="product-section-heading">
+            <h3>Hình ảnh</h3>
+
+            <span class="count" id="image-count"> 0 </span>
+          </div>
+
+          <div class="product-gallery" id="product-gallery"></div>
+        </section>
+      </div>
+    </dialog>
+  </body>
+</html>

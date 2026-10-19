@@ -58,6 +58,8 @@ query ProductSyncPage($first: Int!, $after: String, $query: String!) {
       productType
       description
       status
+      createdAt
+      publishedAt
       updatedAt
       onlineStoreUrl
 
@@ -91,6 +93,31 @@ query ProductSyncPage($first: Int!, $after: String, $query: String!) {
               height
             }
           }
+        }
+      }
+    }
+
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+  }
+}
+"""
+
+
+PRODUCT_DATES_QUERY = """
+query ProductDatePage($first: Int!, $after: String, $query: String!) {
+  products(first: $first, after: $after, query: $query, sortKey: CREATED_AT) {
+    nodes {
+      id
+      legacyResourceId
+      createdAt
+      publishedAt
+
+      variants(first: 100) {
+        nodes {
+          sku
         }
       }
     }
@@ -321,6 +348,14 @@ class ShopifyClient:
             "status:active",
             graphql_query=PRODUCTS_QUERY,
             page_size=page_size,
+        )
+
+    def iter_all_product_dates(self, page_size: int = 100) -> Iterator[dict]:
+        """Load only the fields required to backfill product creation dates."""
+        yield from self._iter_products(
+            "",
+            graphql_query=PRODUCT_DATES_QUERY,
+            page_size=min(max(int(page_size), 1), 100),
         )
 
     def iter_active_inventory_products(

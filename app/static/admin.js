@@ -564,7 +564,7 @@
     $("upload-error").textContent = "";
     fillTypeOptions($("document-type"));
     $("file-label").textContent = "Chọn file hoặc kéo thả vào đây";
-    $("file-description").textContent = "TXT, MD hoặc PDF có lớp văn bản";
+    $("file-description").textContent = "TXT, MD, PDF, DOCX, XLSX hoặc CSV";
     updating = Boolean(doc);
     sourceKey = doc ? doc.source_key : `upload/${crypto.randomUUID()}`;
     $("upload-title").textContent = updating
@@ -696,9 +696,9 @@
     task(async () => {
       $("upload-error").textContent = "";
       const file = $("upload-file").files[0];
-      if (!file || !/\.(txt|md|pdf)$/i.test(file.name) || !file.size) {
+      if (!file || !/\.(txt|md|pdf|docx|xlsx|csv)$/i.test(file.name) || !file.size) {
         $("upload-error").textContent =
-          "Chọn file TXT, MD hoặc PDF có nội dung.";
+          "Chọn file TXT, MD, PDF, DOCX, XLSX hoặc CSV có nội dung.";
         return;
       }
       const title = $("document-title").value.trim();

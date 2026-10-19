@@ -12,9 +12,11 @@ from app.debug_log import debug_event
 from app.models import DocumentRequest
 from app.pdf_chunking import prepare_pdf_document
 from app.pdf_extract import extract_pdf
+from app.pdf_assets import prepare_pdf_assets
+from app.office_extract import OfficeExtractionError, extract_office_file
 from app.search_text import build_search_text
 from app.retrieval import (
-    condense_part_overview,
+    build_section_outline, condense_part_overview,
     heading_context_match,
     reciprocal_rank_fusion,
     select_section_scopes,
@@ -34,11 +36,14 @@ class ServiceBusy(RuntimeError):
 
 
 class KnowledgeService:
-    def __init__(self, settings, repository, embedder, storage=None):
+    def __init__(self, settings, repository, embedder, storage=None,
+                 asset_repository=None, asset_storage=None):
         self.settings = settings
         self.repository = repository
         self.embedder = embedder
         self.storage = storage if storage is not None else LocalFileStore()
+        self.asset_repository = asset_repository
+        self.asset_storage = asset_storage
         self.slots = BoundedSemaphore(settings.rag_max_concurrent_requests)
         self._bm25_lock = RLock()
         self._bm25_index = None
@@ -90,12 +95,11 @@ class KnowledgeService:
             self.slots.release()
 
     def ingest(self, document: DocumentRequest, *, original_data=None, original_filename=None,
-               prepared_chunks=None):
+               prepared_chunks=None, prepared_assets=None):
         if len(document.text) > self.settings.rag_max_document_chars or "\x00" in document.text:
             raise InvalidDocument("Tài liệu quá dài hoặc chứa ký tự không hợp lệ")
         if prepared_chunks is not None and len(prepared_chunks) > self.settings.rag_max_chunks:
             raise InvalidDocument("Quá nhiều đoạn; hãy chia tài liệu thành các phần nhỏ hơn")
-        # Reject documents that cannot possibly fit before making a paid semantic call.
         minimum_chunks = math.ceil(len(document.text) / self.settings.rag_chunk_size)
         if minimum_chunks > self.settings.rag_max_chunks:
             raise InvalidDocument("Quá nhiều đoạn; hãy chia tài liệu thành các phần nhỏ hơn")
@@ -108,7 +112,6 @@ class KnowledgeService:
                     document.text,
                     self.embedder,
                     max_chars=self.settings.rag_chunk_size,
-                    # Keep older small RAG_CHUNK_SIZE configurations valid.
                     min_chars=min(
                         self.settings.rag_semantic_min_chars,
                         self.settings.rag_chunk_size - 1,
@@ -130,7 +133,6 @@ class KnowledgeService:
                 raise InvalidDocument("Tài liệu không có nội dung văn bản để lập chỉ mục")
             if len(chunks) > self.settings.rag_max_chunks:
                 raise InvalidDocument("Quá nhiều đoạn; hãy chia tài liệu thành các phần nhỏ hơn")
-            # Finish ALL embeddings before opening the write transaction.
             vectors = self.embedder.embed([
                 build_search_text(
                     title=document.title,
@@ -145,10 +147,18 @@ class KnowledgeService:
                 original_filename if original_data is not None else document.title + ".txt",
                 origin="upload" if original_data is not None else "text",
             )
-            # Persist the complete file BEFORE committing a database reference to it.
-            # A DB/commit failure may leave an unreferenced file. Retain it: a lost
-            # commit acknowledgement is ambiguous and deleting could lose a committed file.
             result = self.repository.replace(document, chunks, vectors, self.embedder, stored_file=stored)
+            if self.asset_repository is not None and self.asset_storage is not None:
+                document_id = int(result["id"])
+                stored_assets = self.asset_storage.save(
+                    document_id, prepared_assets or [],
+                )
+                asset_rows = self.asset_repository.replace(document_id, stored_assets)
+                self.asset_storage.prune(
+                    document_id,
+                    [row["storage_name"] for row in asset_rows],
+                )
+                result["asset_count"] = len(asset_rows)
             if chunking_stats is not None:
                 result["chunking_method"] = chunking_stats.method
                 result["chunking_stats"] = {
@@ -171,7 +181,12 @@ class KnowledgeService:
         if row is None:
             return None
         removed = self.storage.remove(row.pop("file_storage_key", None))
+        assets_removed = True
+        if self.asset_repository is not None and self.asset_storage is not None:
+            self.asset_repository.delete_document(document_id)
+            assets_removed = self.asset_storage.remove(document_id)
         result = {**row, "local_file_deleted": removed}
+        result["local_assets_deleted"] = assets_removed
         if not removed:
             result["warning"] = "Đã xóa dữ liệu tìm kiếm, nhưng chưa xóa được file local. Cần kiểm tra thư mục lưu trữ trên máy chủ."
         self._refresh_bm25_after_write(result)
@@ -199,16 +214,27 @@ class KnowledgeService:
         return self.prepare_upload(filename, data)[0]
 
     def prepare_upload(self, filename: str, data: bytes):
+        text, chunks, _ = self.prepare_upload_with_assets(filename, data)
+        return text, chunks
+
+    def prepare_upload_with_assets(self, filename: str, data: bytes):
         """Return source text and optional PDF chunks; parse each upload once."""
         suffix = Path(filename).suffix.lower()
-        if suffix not in {".txt", ".md", ".pdf"}:
-            raise InvalidDocument("Chỉ hỗ trợ TXT, MD và PDF có lớp văn bản")
+        if suffix not in {".txt", ".md", ".pdf", ".docx", ".xlsx", ".csv"}:
+            raise InvalidDocument("Chỉ hỗ trợ TXT, MD, PDF, DOCX, XLSX và CSV")
         if len(data) > self.settings.rag_max_upload_bytes:
             raise InvalidDocument("File vượt giới hạn dung lượng")
         chunks = None
+        assets = []
         try:
-            if suffix != ".pdf":
+            if suffix in {".txt", ".md"}:
                 text = data.decode("utf-8-sig")
+            elif suffix in {".docx", ".xlsx", ".csv"}:
+                text = extract_office_file(
+                    filename,
+                    data,
+                    max_chars=self.settings.rag_max_document_chars,
+                )
             else:
                 with self.capacity():
                     started = perf_counter()
@@ -228,30 +254,43 @@ class KnowledgeService:
                         self.settings.rag_chunk_overlap,
                         split_sections=self.settings.rag_chunking_strategy != "adaptive",
                     )
+                    assets = prepare_pdf_assets(extraction)
                     debug_event(
                         'RAG PDF PREPARED', pages=extraction.page_count,
                         extracted_lines=len(extraction.lines), chunks=len(chunks),
                         tables=len(extraction.tables),
                         table_rows=sum(len(table.rows) for table in extraction.tables),
+                        images=len(assets),
                         sections=len({chunk.section_path for chunk in chunks}),
                         time_ms=round((perf_counter() - started) * 1000, 2),
                     )
         except (InvalidDocument, ServiceBusy):
             raise
+        except OfficeExtractionError as exc:
+            raise InvalidDocument(str(exc)) from exc
         except ValueError as exc:
+            if suffix in {".docx", ".xlsx", ".csv"}:
+                raise InvalidDocument(
+                    "Không đọc được file; kiểm tra file có đúng định dạng"
+                ) from exc
             message = str(exc) if suffix == ".pdf" else "TXT/MD cần mã hóa UTF-8"
             raise InvalidDocument(message) from exc
         except Exception as exc:
+            if suffix in {".docx", ".xlsx", ".csv"}:
+                raise InvalidDocument(
+                    "Không đọc được file; kiểm tra file có đúng định dạng"
+                ) from exc
             raise InvalidDocument("Không đọc được file; kiểm tra file PDF hoặc mã hóa UTF-8 của TXT/MD") from exc
         if not text.strip():
             raise InvalidDocument("Không tìm thấy văn bản; PDF scan cần OCR trước khi tải lên")
-        return text, chunks
+        return text, chunks, assets
 
     def search(self, request, *, numbered_sources=False, expand_documents=False,
                expand_sections=False):
         started = perf_counter()
         retrieval_scope = 'top_k_chunks'
         expansion_limited = False
+        selected_section_scopes = []
         top_k = request.top_k or self.settings.rag_top_k
         hybrid = self.settings.rag_hybrid_enabled
         candidate_limit = max(top_k, self.settings.rag_hybrid_candidates) if hybrid else top_k
@@ -316,6 +355,7 @@ class KnowledgeService:
                             expansion_limited = len(expanded) > limit or len(scopes) > len(selected)
                             rows = condense_part_overview(expanded[:limit], selected)
                             retrieval_scope = 'selected_sections'
+                            selected_section_scopes = selected
                         debug_event('RAG SECTION EXPANSION', scopes=selected,
                                     trigger='heading_match' if structural_section_context
                                     and not expand_sections else 'query_intent',
@@ -400,9 +440,37 @@ class KnowledgeService:
             used += len(part) + (2 if parts else 0)
             parts.append(part)
             sources.append({key: row.get(key) for key in (
-                "source_key", "title", "category", "heading", "chunk_index", "similarity",
+                "document_id", "source_key", "title", "category", "heading", "section_path",
+                "chunk_index", "similarity",
                 "bm25_score", "rrf_score", "bm25_rank", "vector_rank",
             )})
+        if sources and self.asset_repository is not None:
+            asset_rows = self.asset_repository.list_for_documents(
+                source.get("document_id") for source in sources
+            )
+            by_scope = {}
+            for asset in asset_rows:
+                key = (int(asset["document_id"]), tuple(asset.get("section_path") or ()))
+                by_scope.setdefault(key, []).append({
+                    "id": int(asset["id"]),
+                    "asset_type": asset["asset_type"],
+                    "page_number": asset["page_number"],
+                    "width": asset["width"],
+                    "height": asset["height"],
+                    "bbox": asset["bbox"],
+                    "media_type": asset["media_type"],
+                    "url": f"/api/v1/knowledge/assets/{asset['id']}",
+                    "caption": asset.get("caption"),
+                })
+            for source in sources:
+                key = (
+                    int(source["document_id"]),
+                    tuple(source.get("section_path") or ()),
+                )
+                source["assets"] = by_scope.get(key, [])
+        section_outline = build_section_outline(sources, selected_section_scopes)
+        if section_outline:
+            debug_event('RAG SECTION OUTLINE', sections=section_outline)
         elapsed_ms = round((perf_counter() - started) * 1000, 2)
         debug_event('RAG CONTEXT', status='knowledge_found' if parts else 'knowledge_not_found',
                     selected_chunks=len(sources), context_chars=used, time_ms=elapsed_ms,
@@ -420,5 +488,6 @@ class KnowledgeService:
                                                and not (context_truncated or expansion_limited),
                 "selected_sections_complete": retrieval_scope == 'selected_sections'
                                               and not (context_truncated or expansion_limited),
+                "selected_sections": section_outline,
             },
         }

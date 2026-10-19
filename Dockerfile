@@ -9,7 +9,7 @@ COPY requirements.txt ./
 RUN python -m pip install --no-cache-dir -r requirements.txt
 
 RUN useradd --system --uid 10001 --create-home rag \
-    && mkdir -p /app/knowlegde /app/storage/documents \
+    && mkdir -p /app/knowlegde /app/storage/documents /app/storage/document_assets \
     && chown -R rag:rag /app
 
 COPY --chown=rag:rag app ./app

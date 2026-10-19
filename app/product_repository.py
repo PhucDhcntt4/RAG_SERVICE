@@ -4,6 +4,7 @@ import base64
 import json
 import re
 import unicodedata
+from datetime import UTC, datetime
 from urllib.parse import quote
 
 import httpx
@@ -167,6 +168,9 @@ class ProductRepository:
                 0,
             ),
             "ai_ready": bool(summary.get("ai_ready")),
+            "created_at": payload.get("created_at"),
+            "published_at": payload.get("published_at"),
+            "new_at": payload.get("new_at"),
             "updated_at": (
                 payload.get("updated_at")
                 or summary.get("updated_at")
@@ -366,6 +370,109 @@ class ProductRepository:
         return {
             "product_types": sorted(product_types, key=str.casefold),
             "statuses": sorted(statuses, key=str.casefold),
+        }
+
+    def list_latest_products(
+        self,
+        *,
+        limit: int = 10,
+        page: int = 1,
+        product_type: str | None = None,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+    ):
+        """Return a page of ACTIVE products ordered by root new_at."""
+        requested_page = max(1, int(page))
+        page_size = max(1, min(int(limit), 50))
+        selected_product_type = str(product_type or "").strip()
+        normalized_from = (
+            date_from.astimezone(UTC)
+            if date_from is not None
+            else None
+        )
+        normalized_to = (
+            date_to.astimezone(UTC)
+            if date_to is not None
+            else None
+        )
+        conditions = [
+            {
+                "key": "status",
+                "match": {"value": "ACTIVE"},
+            }
+        ]
+        if selected_product_type:
+            conditions.append(
+                {
+                    "key": "product_type",
+                    "match": {"value": selected_product_type},
+                }
+            )
+
+        rows = []
+        offset = None
+        while True:
+            body = {
+                "limit": 256,
+                "with_payload": True,
+                "with_vector": False,
+                "filter": {"must": conditions},
+            }
+            if offset is not None:
+                body["offset"] = offset
+
+            result = self._request(
+                "POST",
+                self._collection_path(self.catalog_collection) + "/points/scroll",
+                json=body,
+            )
+
+            for point in result.get("points", []):
+                payload = point.get("payload") or {}
+                new_at = str(payload.get("new_at") or "").strip()
+                if not new_at:
+                    continue
+                try:
+                    parsed_new_at = datetime.fromisoformat(
+                        new_at[:-1] + "+00:00" if new_at.endswith("Z") else new_at
+                    )
+                    if parsed_new_at.tzinfo is None:
+                        parsed_new_at = parsed_new_at.replace(tzinfo=UTC)
+                    parsed_new_at = parsed_new_at.astimezone(UTC)
+                except ValueError:
+                    continue
+                if normalized_from is not None and parsed_new_at < normalized_from:
+                    continue
+                if normalized_to is not None and parsed_new_at >= normalized_to:
+                    continue
+                row = self._product_summary(point)
+                if row["product_code"]:
+                    row["_new_at_sort"] = parsed_new_at
+                    rows.append(row)
+
+            offset = result.get("next_page_offset")
+            if offset is None:
+                break
+
+        rows.sort(key=lambda row: row["_new_at_sort"], reverse=True)
+        total = len(rows)
+        total_pages = (total + page_size - 1) // page_size
+        start = (requested_page - 1) * page_size
+        selected = rows[start : start + page_size]
+        for row in selected:
+            row.pop("_new_at_sort", None)
+        return {
+            "products": selected,
+            "page": requested_page,
+            "limit": page_size,
+            "total": total,
+            "total_pages": total_pages,
+            "product_type": selected_product_type,
+            "status": "ACTIVE",
+            "sort_by": "new_at",
+            "order": "desc",
+            "date_from": date_from.isoformat() if date_from is not None else None,
+            "date_to": date_to.isoformat() if date_to is not None else None,
         }
 
     def list_products_page(

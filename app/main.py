@@ -1,6 +1,7 @@
 import logging
 import secrets
 from contextlib import asynccontextmanager
+from datetime import datetime
 from time import perf_counter
 from typing import Annotated
 from urllib.parse import quote
@@ -28,6 +29,8 @@ from app.local_admin import allow_local_admin
 from app.qdrant_repository import QdrantRepository
 from app.service import InvalidDocument, KnowledgeService, ServiceBusy
 from app.storage import StorageError
+from app.document_asset_repository import DocumentAssetRepository
+from app.document_asset_storage import DocumentAssetStore
 from app.taxonomy_repository import (
     CompatibilityTaxonomy, TaxonomyConflict, TaxonomyError, TaxonomyNotFound,
     TaxonomyRepository,
@@ -78,12 +81,11 @@ class RequestGuard:
         if role is None:
             return await JSONResponse({"detail": "API key không hợp lệ"}, status_code=401,
                                       headers={"WWW-Authenticate": "Bearer"})(scope, receive, send)
-        if scope["path"].startswith(
-            (
-                "/api/v1/documents",
-                "/api/v1/products",
-            )
-        ) and role != "admin":
+        admin_only_path = scope["path"].startswith("/api/v1/documents") or (
+            scope["path"].startswith("/api/v1/products")
+            and scope["path"] != "/api/v1/products/latest"
+        )
+        if admin_only_path and role != "admin":
             return await JSONResponse(
                 {"detail": "Cần ADMIN_API_KEY"},
                 status_code=403,
@@ -130,8 +132,12 @@ def create_app(settings=None, service=None, chat=None, taxonomy=None):
         owned_chat = None
         owned_repository = None
         owned_taxonomy = None
+        owned_document_assets = None
         owned_products = None
         try:
+            if config.database_url is not None:
+                owned_document_assets = DocumentAssetRepository(config)
+                owned_document_assets.initialize()
             if chat is None:
                 owned_chat = GeminiChat(config)
             application.state.chat = chat if chat is not None else owned_chat
@@ -139,7 +145,9 @@ def create_app(settings=None, service=None, chat=None, taxonomy=None):
                 owned_embedder = GeminiEmbedder(config)
                 owned_repository = QdrantRepository(config)
                 application.state.service = KnowledgeService(
-                    config, owned_repository, owned_embedder
+                    config, owned_repository, owned_embedder,
+                    asset_repository=owned_document_assets,
+                    asset_storage=DocumentAssetStore(),
                 )
             else:
                 application.state.service = service
@@ -431,7 +439,9 @@ def create_app(settings=None, service=None, chat=None, taxonomy=None):
             data = file.file.read(svc.settings.rag_max_upload_bytes + 1)
             if len(data) > svc.settings.rag_max_upload_bytes:
                 raise HTTPException(413, "File vượt giới hạn dung lượng")
-            text, prepared_chunks = svc.prepare_upload(file.filename or "", data)
+            text, prepared_chunks, prepared_assets = svc.prepare_upload_with_assets(
+                file.filename or "", data
+            )
             try:
                 payload = DocumentRequest(source_key=source_key, title=title,
                                           category=category, group_id=group_id, text=text)
@@ -439,9 +449,32 @@ def create_app(settings=None, service=None, chat=None, taxonomy=None):
             except ValidationError as exc:
                 raise HTTPException(422, "Tên nguồn, tiêu đề, nhóm hoặc nội dung không hợp lệ") from exc
             return svc.ingest(payload, original_data=data, original_filename=file.filename,
-                              prepared_chunks=prepared_chunks)
+                              prepared_chunks=prepared_chunks,
+                              prepared_assets=prepared_assets)
         finally:
             file.file.close()
+
+    @application.get("/api/v1/knowledge/assets/{asset_id}",
+                     dependencies=[Depends(authorize)], tags=["Search"])
+    def knowledge_asset(asset_id: int, svc=Depends(current_service)):
+        if svc.asset_repository is None or svc.asset_storage is None:
+            raise HTTPException(404, "Document asset storage is not configured")
+        row = svc.asset_repository.get(asset_id)
+        if row is None:
+            raise HTTPException(404, "Khong tim thay anh tai lieu")
+        try:
+            data = svc.asset_storage.read(row["document_id"], row["storage_name"])
+        except FileNotFoundError:
+            raise HTTPException(404, "File anh tai lieu khong con tren may chu") from None
+        return Response(
+            data,
+            media_type=row["media_type"],
+            headers={
+                "Content-Disposition": f'inline; filename="asset-{asset_id}.png"',
+                "Cache-Control": "private, max-age=3600",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     @application.get("/api/v1/documents", dependencies=[Depends(admin)], tags=["Documents"])
     def documents(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0),
@@ -649,6 +682,56 @@ def create_app(settings=None, service=None, chat=None, taxonomy=None):
         products=Depends(current_products),
     ):
         return products.list_filter_options()
+
+
+    @application.get(
+        "/api/v1/products/latest",
+        dependencies=[Depends(authorize)],
+        tags=["Products"],
+    )
+    def latest_products(
+        limit: int = Query(10, ge=1, le=50),
+        page: int = Query(1, ge=1),
+        date_from: str | None = Query(None, max_length=40),
+        date_to: str | None = Query(None, max_length=40),
+        product_type: str | None = Query(None, max_length=200),
+        products=Depends(current_products),
+    ):
+        def parse_date_bound(field_name: str, value: str | None):
+            if value is None:
+                return None
+            text = value.strip()
+            # In query strings an unescaped '+' may be decoded as a space.
+            # Accept both +07:00 and its decoded form " 07:00".
+            if len(text) >= 6 and text[-6] == " " and text[-5:-3].isdigit():
+                text = text[:-6] + "+" + text[-5:]
+            try:
+                parsed = datetime.fromisoformat(
+                    text[:-1] + "+00:00" if text.endswith("Z") else text
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    422,
+                    f"{field_name} không đúng ISO 8601",
+                ) from exc
+            if parsed.tzinfo is None:
+                raise HTTPException(
+                    422,
+                    f"{field_name} phải có múi giờ, ví dụ +07:00 hoặc Z",
+                )
+            return parsed
+
+        parsed_from = parse_date_bound("date_from", date_from)
+        parsed_to = parse_date_bound("date_to", date_to)
+        if parsed_from is not None and parsed_to is not None and parsed_from >= parsed_to:
+            raise HTTPException(422, "date_from phải nhỏ hơn date_to")
+        return products.list_latest_products(
+            limit=limit,
+            page=page,
+            product_type=product_type,
+            date_from=parsed_from,
+            date_to=parsed_to,
+        )
 
 
     @application.get(

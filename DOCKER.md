@@ -58,7 +58,7 @@ Ctrl+C khi đang xem log chỉ dừng việc theo dõi log. Có thể dùng các
 
 - `.env` được mount chỉ đọc vào container; không nhúng vào image.
 - `knowlegde` được bind mount vào `/app/knowlegde`, nên file upload vẫn xuất hiện ngay trong thư mục Windows, giữ tên/đuôi như hiện tại.
-- `storage` được bind mount vào Product Sync Worker để ảnh sản phẩm đã tải không mất khi tạo lại container.
+- `storage` được bind mount vào cả RAG app và Product Sync Worker. Thư mục này giữ ảnh sản phẩm và `document_assets` trích từ PDF khi tạo lại container.
 - Qdrant ở ngoài container, nên `stop`, `down` hoặc build lại image không xóa collection Qdrant.
 - PostgreSQL dùng volume `rag_postgres_data`; `docker compose down` không xóa volume. Không thêm `-v` nếu chưa sao lưu loại tài liệu và nhóm.
 - `down` không xóa các file trong thư mục bind mount. Tuy nhiên, thao tác **Xóa tài liệu** trên giao diện vẫn xóa file tương ứng như trước. [Bind mounts](https://docs.docker.com/engine/storage/bind-mounts/)
