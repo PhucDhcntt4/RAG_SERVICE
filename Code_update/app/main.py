@@ -81,9 +81,36 @@ class RequestGuard:
         if role is None:
             return await JSONResponse({"detail": "API key không hợp lệ"}, status_code=401,
                                       headers={"WWW-Authenticate": "Bearer"})(scope, receive, send)
-        admin_only_path = scope["path"].startswith("/api/v1/documents") or (
-            scope["path"].startswith("/api/v1/products")
-            and scope["path"] != "/api/v1/products/latest"
+        request_path = scope["path"]
+        request_method = str(scope.get("method") or "GET").upper()
+        product_detail_prefix = "/api/v1/products/"
+        product_detail_code = (
+            request_path[len(product_detail_prefix):]
+            if request_path.startswith(product_detail_prefix)
+            else ""
+        )
+        reserved_product_paths = {
+            "collections",
+            "filters",
+            "latest",
+            "sync",
+            "inventory-sync",
+        }
+        read_only_product_path = request_method == "GET" and (
+            request_path in {
+                "/api/v1/products",
+                "/api/v1/products/filters",
+                "/api/v1/products/latest",
+            }
+            or (
+                bool(product_detail_code)
+                and "/" not in product_detail_code
+                and product_detail_code not in reserved_product_paths
+            )
+        )
+        admin_only_path = request_path.startswith("/api/v1/documents") or (
+            request_path.startswith("/api/v1/products")
+            and not read_only_product_path
         )
         if admin_only_path and role != "admin":
             return await JSONResponse(
@@ -635,7 +662,7 @@ def create_app(settings=None, service=None, chat=None, taxonomy=None):
 
     @application.get(
         "/api/v1/products",
-        dependencies=[Depends(admin)],
+        dependencies=[Depends(authorize)],
         tags=["Products"],
     )
     def product_list(
@@ -675,7 +702,7 @@ def create_app(settings=None, service=None, chat=None, taxonomy=None):
 
     @application.get(
         "/api/v1/products/filters",
-        dependencies=[Depends(admin)],
+        dependencies=[Depends(authorize)],
         tags=["Products"],
     )
     def product_filters(
@@ -736,7 +763,7 @@ def create_app(settings=None, service=None, chat=None, taxonomy=None):
 
     @application.get(
         "/api/v1/products/{product_code}",
-        dependencies=[Depends(admin)],
+        dependencies=[Depends(authorize)],
         tags=["Products"],
     )
     def product_detail(

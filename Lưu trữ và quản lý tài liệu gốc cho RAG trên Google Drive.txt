@@ -1,0 +1,129 @@
+Hệ thống Đông Hải Company Knowledge Base trên Google Drive, 
+==========================================================
+
+Google Drive là nơi lưu trữ và quản lý tài liệu gốc, 
+còn hệ thống RAG (Qdrant + PostgreSQL) của Đông Hải tự động đồng bộ tài liệu để nhân viên tra cứu qua chatbot AI.
+
+
+sử dụng Google Shared Drive:
+
+DONGHAI–COMPANY DOCS
+
+1. BGĐ–Ban Giám đốc
+2. HR–Nhân sự
+3. ACCOUNTING–Kế toán
+4. SALES–Kinh doanh
+5. MARKETING–Marketing
+6. CSKH–Chăm sóc khách hàng
+7. IT–Công nghệ thông tin
+
+
+***Trong mỗi phòng ban, chuẩn hóa hai vùng tài liệu:
+02_HR – Nhân sự
+
+PUBLIC/
+	so tay nhân viên.pdf			
+	Hướng dẫn chấm công.docx
+	Quy định nghỉ phép.pdf
+
+PRIVATE/
+	Chính sách lương nội bộ.pdf
+	Kế hoạch nhân sự 2027.xlsx
+	Báo cáo chi phí nhân sự.xlsx
+	
+
+***TRẠNG THÁI AUTO-UPLOAD TÀI LIỆU 
+DONGHAI – COMPANY DOCS
+02_HR – Nhân sự
+	PUBLIC
+		NEW
+			Nhân viên upload tài liệu mới hoặc phiên bản mới vào đây
+		DONE
+			Bot tự chuyển file vào đây sau khi import thành công
+		ERROR
+			File lỗi định dạng, trùng phiên bản hoặc không xử lý được
+
+	PRIVATE
+		NEW
+			Nhân viên upload tài liệu mới hoặc phiên bản mới vào đây
+		DONE
+			Bot tự chuyển file vào đây sau khi import thành công
+		ERROR
+			File lỗi định dạng, trùng phiên bản hoặc không xử lý được
+			
+
+1. Cấu trúc tên file chuẩn
+ĐỊNH DẠNG CHUẨN:
+
+	[PHONGBAN]-[LOAI]-[STT]_[TEN-TAI-LIEU]_V[VERSION].[EXT]
+
+Ví dụ
+HR-QT-001_Quy-trinh-nghi-phep_V1.pdf
+IT-HD-002_Huong-dan-su-dung-POS_V2.docx
+CS-CS-003_Chinh-sach-bao-hanh_V3.pdf
+
+2. Quy định từng thành phần
+
+Thành phần		Quy định					Ví dụ
+PHONGBAN		Mã phòng ban viết hoa		HR, IT, CS
+LOAI			Mã loại tài liệu			QT, QD, CS, HD, BC
+STT				Số thứ tự 3 chữ số			001, 002
+TEN-TAI-LIEU	Tên không dấu, nối bằng -	Quy-trinh-nghi-phep
+VERSION			Số nguyên bắt đầu từ 1		V1, V2, V3, ...
+EXT				Định dạng file				pdf, docx, xlsx
+
+Danh mục loại tài liệu
+Mã	Loại tài liệu
+QT	Quy trình
+QD	Quy định
+CS	Chính sách
+HD	Hướng dẫn
+BM	Biểu mẫu
+BC	Báo cáo
+KH	Kế hoạch
+TL	Tài liệu tham khảo
+
+3. Ví dụ theo phòng ban
+Phòng ban	Tên file
+Nhân sự		HR-QT-001_Quy-trinh-tuyen-dung_V1.pdf
+Kế toán		ACC-QD-001_Quy-dinh-thanh-toan_V2.pdf
+Kinh doanh	SALES-HD-001_Huong-dan-ban-hang_V1.pdf
+Marketing	MKT-KH-001_Ke-hoach-marketing_V3.xlsx
+Kho vận		WH-QT-001_Quy-trinh-nhap-kho_V2.pdf
+CSKH		CS-CS-001_Chinh-sach-bao-hanh_V4.pdf
+IT			IT-HD-001_Huong-dan-su-dung-Odoo_V2.docx
+BGĐ			BGD-QD-001_Quy-dinh-phan-quyen_V1.pdf
+
+4. Nguyên tắc quản lý version
+Khi cập nhật tài liệu, giữ nguyên mã tài liệu và tên, chỉ tăng số version.
+
+Ví dụ: Quy trình bảo hành
+doc_name								doc_version			doc_status
+CS-QT-001_Quy-trinh-bao-hanh_V1.pdf			V1				inactive
+CS-QT-001_Quy-trinh-bao-hanh_V2.pdf			V2				inactive
+CS-QT-001_Quy-trinh-bao-hanh_V3.pdf			V3				active
+
+5. Những quy định tôi khuyên áp dụng
+- Một mã tài liệu chỉ đại diện cho một tài liệu nghiệp vụ, không tái sử dụng mã cho nội dung khác.
+- Không cần đưa PUBLIC hoặc PRIVATE vào tên file vì bot xác định theo thư mục.
+- Không cần đưa ngày upload vào tên file; hệ thống lấy thời gian từ Drive và ngày hiệu lực từ PostgreSQL.
+- Nếu cùng mã tài liệu và cùng version nhưng khác nội dung, bot báo lỗi trùng phiên bản.
+- File trong DONE đã phát hành không được sửa nội dung; nếu cần thay đổi phải tạo V tiếp theo.
+- Bot kiểm tra đúng cú pháp tên file trước khi import. File sai quy tắc được ghi nhận lỗi và chuyển sang ERROR theo quy trình đã chốt.
+
+
+6. Quy trình đồng bộ tự động
+					NEW
+		Nhân viên upload V1, V2, V3...
+					|
+					V
+			Drive Sync Worker
+	Đọc file → kiểm tra version → extract → chunk → embedding
+					|
+					V	
+			PostgreSQL + Qdrant
+	Lưu tài liệu, phiên bản, vector và quyền truy cập
+					|
+					V	
+					DONE
+		Bot tự move file sau khi import thành công
