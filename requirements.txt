@@ -19,3 +19,7 @@ huggingface-hub>=0.25,<2
 safetensors>=0.4.5,<1
 python-docx==1.2.0
 openpyxl==3.1.5
+
+# Google Shared Drive automatic document sync
+google-api-python-client>=2,<3
+google-auth>=2,<3

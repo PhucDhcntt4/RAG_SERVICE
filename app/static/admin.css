@@ -371,17 +371,28 @@ table {
   text-align: left;
   white-space: nowrap;
 }
+.library table {
+  table-layout: fixed;
+  min-width: 1080px;
+}
+.library th:nth-child(1) { width: 22%; }
+.library th:nth-child(2) { width: 12%; }
+.library th:nth-child(3) { width: 14%; }
+.library th:nth-child(4) { width: 7%; }
+.library th:nth-child(5) { width: 11%; }
+.library th:nth-child(6) { width: 11%; }
+.library th:nth-child(7) { width: 23%; }
 th {
   font-size: 9px;
   letter-spacing: 1.2px;
   font-weight: 650;
   color: #7d8d82;
   background: #f8faf8;
-  padding: 15px 22px;
+  padding: 14px 16px;
   border-block: 1px solid var(--line);
 }
 td {
-  padding: 22px;
+  padding: 18px 16px;
   border-bottom: 1px solid #edf1ee;
   font-size: 12px;
 }
@@ -395,8 +406,8 @@ tbody tr:hover {
   display: flex;
   gap: 13px;
   align-items: center;
-  min-width: 220px;
-  max-width: 420px;
+  min-width: 0;
+  max-width: 100%;
 }
 .file-icon {
   display: grid;
@@ -417,6 +428,9 @@ tbody tr:hover {
   white-space: normal;
   overflow-wrap: anywhere;
   line-height: 1.5;
+}
+.document-cell > div:last-child {
+  min-width: 0;
 }
 .document-meta {
   font-size: 10px;
@@ -451,9 +465,29 @@ tbody tr:hover {
 .status.inactive {
   color: #9c8a66;
 }
+.document-version {
+  color: #315f4c;
+  font-weight: 700;
+}
+.inactive-document {
+  background: #fbfaf6;
+}
+.inactive-document .document-name {
+  color: #77827c;
+}
 .date {
   color: #7d8b81;
   font-size: 11px;
+  white-space: normal;
+  line-height: 1.5;
+}
+.document-actions {
+  white-space: normal;
+}
+.document-actions button {
+  padding: 6px 8px;
+  margin: 2px;
+  font-size: 10px;
 }
 .delete-button {
   background: transparent;
@@ -848,6 +882,13 @@ dialog::backdrop {
 .download-button:hover,
 .classification-button:hover {
   background: #e5f1e9;
+}
+.document-actions .download-button,
+.document-actions .classification-button,
+.document-actions .delete-button {
+  padding: 6px 8px;
+  margin: 2px;
+  font-size: 10px;
 }
 .document-open {
   display: block;

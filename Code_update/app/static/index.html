@@ -24,6 +24,9 @@
         <span aria-hidden="true"></span>
         Sản phẩm
       </a>
+      <a class="nav-item" href="/drive-sync">
+        <span aria-hidden="true"></span> Google Drive Sync
+      </a>
       <div class="sidebar-note">
         <span class="note-symbol" aria-hidden="true">✦</span
         ><strong>Thông tin tốt hơn.<br />Câu trả lời tốt hơn.</strong>
@@ -113,6 +116,12 @@
               <select class="filter-select" id="filter-group" disabled>
                 <option value="">Tất cả nhóm</option>
               </select>
+              <label class="sr-only" for="filter-status">Lọc theo trạng thái</label>
+              <select class="filter-select" id="filter-status" disabled>
+                <option value="">Tất cả trạng thái</option>
+                <option value="true">Đang sử dụng</option>
+                <option value="false">Inactive</option>
+              </select>
               <button class="secondary" id="refresh" disabled>
                 ↻ <span>Làm mới</span></button
               ><button class="text-button" id="disconnect" hidden>
@@ -141,9 +150,10 @@
                   <th>TÊN TÀI LIỆU</th>
                   <th>LOẠI TÀI LIỆU</th>
                   <th>TÀI LIỆU</th>
+                  <th>VERSION</th>
                   <th>TRẠNG THÁI</th>
                   <th>CẬP NHẬT</th>
-                  <th><span class="sr-only">Thao tác</span></th>
+                  <th>THAO TÁC</th>
                 </tr>
               </thead>
               <tbody id="documents"></tbody>

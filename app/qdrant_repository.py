@@ -73,6 +73,10 @@ class QdrantRepository:
         return cls._stable_id("document", source_key)
 
     @classmethod
+    def document_id_for_source(cls, source_key):
+        return cls._document_id(source_key)
+
+    @classmethod
     def _chunk_id(cls, source_key, chunk_index):
         return cls._stable_id("chunk", f"{source_key}:{chunk_index}")
 
@@ -144,7 +148,8 @@ class QdrantRepository:
         query_filter = self._filter([self._match("source_key", source_key)])
         return list(self._scroll(query_filter))
 
-    def replace(self, document, chunks, vectors, embedder, stored_file=None):
+    def replace(self, document, chunks, vectors, embedder, stored_file=None,
+                initial_active=True):
         if len(chunks) != len(vectors):
             raise ValueError("Chunk/vector count mismatch")
         if any(len(vector) != self.dimension for vector in vectors):
@@ -167,6 +172,7 @@ class QdrantRepository:
 
         now = datetime.now(timezone.utc).isoformat()
         created_at = old_payload.get("created_at", now)
+        is_active = old_payload.get("is_active", bool(initial_active))
         checksum = hashlib.sha256(document.text.encode("utf-8")).hexdigest()
         point_ids = []
         points = []
@@ -188,7 +194,7 @@ class QdrantRepository:
                 "embedding_provider": embedder.provider,
                 "embedding_model": embedder.model,
                 "embedding_dimension": embedder.dimension,
-                "is_active": old_payload.get("is_active", True),
+                "is_active": is_active,
                 "created_at": created_at,
                 "updated_at": now,
                 "file_storage_key": stored_file.key if stored_file else None,
@@ -222,7 +228,7 @@ class QdrantRepository:
             "category": document.category,
             "doc_type_id": document.doc_type_id,
             "group_id": document.group_id,
-            "is_active": old_payload.get("is_active", True),
+            "is_active": is_active,
             "updated_at": now,
             "chunk_count": len(chunks),
             "file_name": stored_file.name if stored_file else None,
@@ -295,6 +301,9 @@ class QdrantRepository:
             "category": payload.get("category"),
             "doc_type_id": payload.get("doc_type_id"),
             "group_id": payload.get("group_id"),
+            "document_code": payload.get("document_code"),
+            "document_version": payload.get("document_version"),
+            "drive_scope": payload.get("drive_scope"),
             "source_text": payload.get("source_text", ""),
             "source_checksum": payload.get("source_checksum"),
             "embedding_provider": payload.get("embedding_provider"),
@@ -327,8 +336,13 @@ class QdrantRepository:
                 for value in documents.values()]
 
     def list_documents(self, limit, offset, *, doc_type_id=None, group_id=None,
-                       categories=None):
+                       categories=None, active=None):
         rows = self._documents()
+        if active is not None:
+            rows = [
+                row for row in rows
+                if bool(row.get("is_active", True)) is bool(active)
+            ]
         category_set = set(categories or ())
         if group_id is not None:
             rows = [
@@ -443,6 +457,38 @@ class QdrantRepository:
             },
         )
         return {"id": str(document_id), "is_active": active}
+
+    def set_document_metadata(
+        self,
+        document_id,
+        *,
+        document_code,
+        document_version,
+        drive_scope,
+    ):
+        document_id = int(document_id)
+        if self.get_document(document_id) is None:
+            return None
+        self._request(
+            "POST",
+            self.collection_path + "/points/payload?wait=true",
+            json={
+                "payload": {
+                    "document_code": document_code,
+                    "document_version": document_version,
+                    "drive_scope": drive_scope,
+                },
+                "filter": self._filter([
+                    self._match("document_id", document_id)
+                ]),
+            },
+        )
+        return {
+            "id": str(document_id),
+            "document_code": document_code,
+            "document_version": document_version,
+            "drive_scope": drive_scope,
+        }
 
     def delete(self, document_id):
         document_id = int(document_id)

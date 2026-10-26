@@ -60,6 +60,15 @@ class Settings(BaseModel):
         pattern=r"^[A-Za-z0-9._-]{1,255}$",
     )
 
+    google_drive_credentials_file: str = "API/service.json"
+    google_drive_sync_enabled: bool = False
+    google_drive_department_folder_ids: str = ""
+    google_drive_poll_seconds: int = Field(
+        default=60,
+        ge=10,
+        le=86400,
+    )
+
 
     @model_validator(mode="after")
     def validate_settings(self):
@@ -73,6 +82,13 @@ class Settings(BaseModel):
             raise ValueError("SEARCH_API_KEY và ADMIN_API_KEY phải khác nhau")
         if self.rag_chunk_overlap >= self.rag_chunk_size:
             raise ValueError("RAG_CHUNK_OVERLAP phải nhỏ hơn RAG_CHUNK_SIZE")
+        if (
+            self.google_drive_sync_enabled
+            and not self.google_drive_credentials_path.is_file()
+        ):
+            raise ValueError(
+                "GOOGLE_DRIVE_CREDENTIALS_FILE không tồn tại hoặc không phải file"
+            )
         return self
 
     @classmethod
@@ -80,3 +96,22 @@ class Settings(BaseModel):
         # Explicit project path: never load a parent project's .env accidentally.
         values = {**dotenv_values(ROOT / ".env"), **os.environ}
         return cls.model_validate({key.lower(): value for key, value in values.items()})
+
+
+    @property
+    def google_drive_credentials_path(self) -> Path:
+        value = Path(self.google_drive_credentials_file)
+
+        if value.is_absolute():
+            return value
+
+        return ROOT / value
+
+    @property
+    def google_drive_department_folders(self) -> tuple[str, ...]:
+        """Parse the comma-separated department folder IDs from .env."""
+        values = (
+            item.strip()
+            for item in self.google_drive_department_folder_ids.split(",")
+        )
+        return tuple(dict.fromkeys(item for item in values if item))

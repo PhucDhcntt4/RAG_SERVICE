@@ -11,6 +11,7 @@
     offset = 0,
     filterTypeId = "",
     filterGroupId = "",
+    filterStatus = "",
     rows = [],
     hasNext = false,
     busy = false,
@@ -46,6 +47,7 @@
       "test-rag",
       "filter-type",
       "filter-group",
+      "filter-status",
     ])
       $(id).disabled = busy || !(key || localAdmin);
     $("previous").disabled = busy || !(key || localAdmin) || offset === 0;
@@ -76,12 +78,14 @@
     offset = 0;
     filterTypeId = "";
     filterGroupId = "";
+    filterStatus = "";
     const allTypes = element("option", "", "Tất cả loại");
     allTypes.value = "";
     const allGroups = element("option", "", "Tất cả nhóm");
     allGroups.value = "";
     $("filter-type").replaceChildren(allTypes);
     $("filter-group").replaceChildren(allGroups);
+    $("filter-status").value = "";
     hasNext = false;
     $("documents").replaceChildren();
     $("table-wrap").hidden = true;
@@ -318,6 +322,7 @@
     $("documents").replaceChildren();
     for (const doc of rows) {
       const tr = element("tr");
+      tr.classList.toggle("inactive-document", !doc.is_active);
       const file = element("div", "document-cell");
       file.append(element("span", "file-icon", "DOC"));
       const info = element("div");
@@ -348,6 +353,11 @@
       const category = element("td");
       category.append(element("span", "category", groupName(doc)));
       tr.append(category);
+      const version = element("td", "document-version");
+      version.textContent = doc.document_version
+        ? `V${doc.document_version}`
+        : "—";
+      tr.append(version);
       const status = element("td");
       status.append(
         element(
@@ -373,7 +383,7 @@
               }),
         ),
       );
-      const actions = element("td");
+      const actions = element("td", "document-actions");
       if (doc.has_local_file) {
         const download = element("button", "download-button", "Tải về");
         download.type = "button";
@@ -402,7 +412,7 @@
         );
         actions.append(download);
       }
-      const update = element("button", "download-button", "Cập nhật file");
+      const update = element("button", "download-button", "Cập nhật");
       update.type = "button";
       update.setAttribute("aria-label", `Cập nhật file ${doc.title}`);
       update.addEventListener("click", () => openUpload(doc));
@@ -447,7 +457,8 @@
       await loadTaxonomy();
       const filterParams =
         (filterTypeId ? `&doc_type_id=${filterTypeId}` : "") +
-        (filterGroupId ? `&group_id=${filterGroupId}` : "");
+        (filterGroupId ? `&group_id=${filterGroupId}` : "") +
+        (filterStatus ? `&is_active=${filterStatus}` : "");
       let data = await api(
         `/api/v1/documents?limit=${pageSize + 1}&offset=${offset}${filterParams}`,
       );
@@ -550,6 +561,18 @@
   $("filter-group").addEventListener("change", () =>
     task(async () => {
       filterGroupId = $("filter-group").value;
+      offset = 0;
+      notice("");
+      try {
+        await load();
+      } catch (error) {
+        notice(error.message, true);
+      }
+    }),
+  );
+  $("filter-status").addEventListener("change", () =>
+    task(async () => {
+      filterStatus = $("filter-status").value;
       offset = 0;
       notice("");
       try {

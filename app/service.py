@@ -22,6 +22,7 @@ from app.retrieval import (
     select_section_scopes,
 )
 from app.storage import LocalFileStore
+from app.search_index_state_repository import SearchIndexStateRepository
 
 
 logger = logging.getLogger("rag_service")
@@ -47,6 +48,12 @@ class KnowledgeService:
         self.slots = BoundedSemaphore(settings.rag_max_concurrent_requests)
         self._bm25_lock = RLock()
         self._bm25_index = None
+        self._bm25_revision = None
+        self._index_state = (
+            SearchIndexStateRepository(settings)
+            if getattr(settings, "database_url", None) is not None
+            else None
+        )
 
     @property
     def bm25_count(self):
@@ -55,16 +62,47 @@ class KnowledgeService:
 
     def refresh_bm25(self):
         """Build a complete index, then publish it atomically for readers."""
-        rows = self.repository.list_search_chunks(self.embedder)
-        index = BM25Index(rows)
+        index = None
+        published_revision = None
+
+        # If a worker changes Qdrant while the API is rebuilding, retry once.
+        # Publishing the older revision is also safe: the next search detects
+        # the mismatch and rebuilds again.
+        for _ in range(2):
+            before = (
+                self._index_state.current_revision()
+                if self._index_state is not None
+                else None
+            )
+            rows = self.repository.list_search_chunks(self.embedder)
+            index = BM25Index(rows)
+            after = (
+                self._index_state.current_revision()
+                if self._index_state is not None
+                else None
+            )
+            published_revision = before
+            if before == after:
+                published_revision = after
+                break
+
         with self._bm25_lock:
             self._bm25_index = index
+            self._bm25_revision = published_revision
         debug_event("RAG BM25 INDEX", indexed_chunks=index.count)
         return index.count
 
     def _bm25_search(self, query, categories, limit):
         index = self._bm25_index
-        if index is None:
+        current_revision = (
+            self._index_state.current_revision()
+            if self._index_state is not None
+            else None
+        )
+        if index is None or (
+            self._index_state is not None
+            and self._bm25_revision != current_revision
+        ):
             self.refresh_bm25()
             index = self._bm25_index
         return index.search(query, categories=categories, limit=limit)
@@ -73,12 +111,15 @@ class KnowledgeService:
         if not self.settings.rag_hybrid_enabled:
             return
         try:
+            if self._index_state is not None:
+                self._index_state.bump_revision()
             self.refresh_bm25()
         except Exception as exc:
             # The database transaction already committed. Keep the API result
             # truthful and retry index construction on the next search.
             with self._bm25_lock:
                 self._bm25_index = None
+                self._bm25_revision = None
             logger.error("RAG BM25 refresh failed error_type=%s", type(exc).__name__)
             if result is not None:
                 warning = ("Dữ liệu đã thay đổi nhưng chỉ mục BM25 chưa làm mới; "
@@ -95,7 +136,7 @@ class KnowledgeService:
             self.slots.release()
 
     def ingest(self, document: DocumentRequest, *, original_data=None, original_filename=None,
-               prepared_chunks=None, prepared_assets=None):
+               prepared_chunks=None, prepared_assets=None, initial_active=True):
         if len(document.text) > self.settings.rag_max_document_chars or "\x00" in document.text:
             raise InvalidDocument("Tài liệu quá dài hoặc chứa ký tự không hợp lệ")
         if prepared_chunks is not None and len(prepared_chunks) > self.settings.rag_max_chunks:
@@ -147,7 +188,14 @@ class KnowledgeService:
                 original_filename if original_data is not None else document.title + ".txt",
                 origin="upload" if original_data is not None else "text",
             )
-            result = self.repository.replace(document, chunks, vectors, self.embedder, stored_file=stored)
+            replace_options = {"stored_file": stored}
+            # Preserve compatibility with injected repositories that implement
+            # the historical signature for normal/manual ingestion.
+            if not initial_active:
+                replace_options["initial_active"] = False
+            result = self.repository.replace(
+                document, chunks, vectors, self.embedder, **replace_options
+            )
             if self.asset_repository is not None and self.asset_storage is not None:
                 document_id = int(result["id"])
                 stored_assets = self.asset_storage.save(

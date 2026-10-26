@@ -1,0 +1,298 @@
+HƯỚNG DẪN CHẠY GOOGLE DRIVE AUTO RAG SYNC
+
+Tài liệu này giải thích ngắn gọn: chạy file nào và file đó làm gì.
+
+
+1. CẤU HÌNH TRƯỚC KHI CHẠY
+
+Đặt Service Account tại:
+
+API/service.json
+
+Thêm vào .env:
+
+GOOGLE_DRIVE_CREDENTIALS_FILE=API/service.json
+GOOGLE_DRIVE_SYNC_ENABLED=true
+GOOGLE_DRIVE_DEPARTMENT_FOLDER_IDS=FOLDER_ID_HR,FOLDER_ID_IT
+GOOGLE_DRIVE_POLL_SECONDS=60
+
+Nếu có thêm phòng ban, thêm folder ID và phân cách bằng dấu phẩy.
+
+Mỗi folder phòng ban phải có:
+
+PHONG_BAN
+  PUBLIC
+    NEW
+    DONE
+    ERROR
+  PRIVATE
+    NEW
+    DONE
+    ERROR
+
+File cần đồng bộ được đưa vào NEW.
+
+
+2. CÁC LỆNH CHẠY LẦN ĐẦU
+
+Bước 1 - Cài thư viện:
+
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+requirements.txt dùng để cài các thư viện Python mà dự án cần.
+
+
+Bước 2 - Tạo hoặc cập nhật bảng PostgreSQL:
+
+.\.venv\Scripts\python.exe -m app.init_db --confirm
+
+app/init_db.py dùng để:
+
+- Tạo các bảng còn thiếu.
+- Nâng cấp cấu trúc bảng.
+- Tạo bảng nguồn Drive, tài liệu, job và trạng thái worker.
+- Không xóa dữ liệu PostgreSQL hoặc Qdrant đang có.
+
+
+Bước 3 - Kiểm tra kết nối Google Drive:
+
+.\.venv\Scripts\python.exe -m app.drive_sync.check_connection --folder-id "FOLDER_ID_HR"
+
+app/drive_sync/check_connection.py dùng để:
+
+- Kiểm tra API/service.json.
+- Kiểm tra quyền truy cập folder.
+- Kiểm tra các folder PUBLIC, PRIVATE, NEW, DONE và ERROR.
+
+Phải thấy dòng "Google Drive kết nối thành công".
+
+
+Bước 4 - Chạy API RAG Service:
+
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+
+app/main.py dùng để:
+
+- Chạy API RAG Service.
+- Chạy các trang quản trị.
+- Cung cấp trang Drive Sync tại:
+  http://127.0.0.1:8000/drive-sync
+
+Khi lập trình local có thể dùng:
+
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
+
+
+Bước 5 - Mở Terminal thứ hai và chạy Drive Worker:
+
+.\.venv\Scripts\python.exe -m app.drive_sync.worker
+
+app/drive_sync/worker.py dùng để:
+
+- Đọc các folder ID trong .env.
+- Tự đăng ký nguồn chưa có.
+- Tạo job theo chu kỳ chung.
+- Quét và xử lý file mới.
+- Cập nhật trạng thái Online trên giao diện.
+
+Đây là file cần chạy liên tục khi hệ thống hoạt động.
+
+
+3. CHẠY ĐỒNG BỘ THỦ CÔNG MỘT LẦN
+
+Muốn test toàn bộ quy trình cho một phòng ban:
+
+.\.venv\Scripts\python.exe -m app.drive_sync.sync_once --folder-id "FOLDER_ID_HR"
+
+app/drive_sync/sync_once.py sẽ tự chạy:
+
+1. Quét file trong NEW.
+2. Kiểm tra tên file và version.
+3. Tải và kiểm tra nội dung file.
+4. Trích xuất, chia chunk và tạo embedding.
+5. Ghi vào Qdrant và PostgreSQL.
+6. Chuyển file thành công sang DONE.
+7. Chuyển file lỗi sang ERROR.
+
+Lệnh này dùng để test. Khi chạy chính thức chỉ cần chạy worker.
+
+
+4. CÁC FILE DEBUG RIÊNG
+
+Kiểm tra tên file:
+
+.\.venv\Scripts\python.exe -m app.drive_sync.check_filename --department HR --filename "HR-QT-001_Quy-trinh-nghi-phep_V1.pdf"
+
+app/drive_sync/check_filename.py chỉ kiểm tra tên file, không ghi dữ liệu.
+
+
+Đăng ký riêng một nguồn:
+
+.\.venv\Scripts\python.exe -m app.drive_sync.register_source --folder-id "FOLDER_ID_HR"
+
+app/drive_sync/register_source.py lưu nguồn vào PostgreSQL và tạo nhóm
+hr_public, hr_private nếu chưa có. Worker đã tự làm nên bình thường không cần
+chạy lệnh này.
+
+
+Chỉ quét file trong NEW:
+
+.\.venv\Scripts\python.exe -m app.drive_sync.scan_new --folder-id "FOLDER_ID_HR"
+
+app/drive_sync/scan_new.py đọc file mới, kiểm tra tên và lưu thông tin ban đầu
+vào PostgreSQL. File này chưa import vào Qdrant.
+
+
+Chỉ kiểm tra version:
+
+.\.venv\Scripts\python.exe -m app.drive_sync.check_versions --folder-id "FOLDER_ID_HR"
+
+app/drive_sync/check_versions.py tải file, tính SHA-256 và kiểm tra version.
+File này chưa import vào Qdrant.
+
+
+Chỉ import file đã sẵn sàng:
+
+.\.venv\Scripts\python.exe -m app.drive_sync.import_ready --folder-id "FOLDER_ID_HR"
+
+app/drive_sync/import_ready.py trích xuất nội dung, tạo embedding, ghi Qdrant
+và kích hoạt version mới.
+
+
+Chỉ chuyển file đã xử lý:
+
+.\.venv\Scripts\python.exe -m app.drive_sync.move_processed --folder-id "FOLDER_ID_HR"
+
+app/drive_sync/move_processed.py chuyển file thành công sang DONE và file lỗi
+sang ERROR.
+
+
+5. CÁCH CHẠY HẰNG NGÀY
+
+Chỉ cần duy trì hai Terminal:
+
+Terminal 1 - API:
+
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+
+Terminal 2 - Drive Worker:
+
+.\.venv\Scripts\python.exe -m app.drive_sync.worker
+
+Sau đó hệ thống hoạt động như sau:
+
+1. Đưa file vào NEW.
+2. Worker tự phát hiện khi đến chu kỳ.
+3. Worker cập nhật tài liệu vào RAG.
+4. Thành công: file sang DONE.
+5. Thất bại: file sang ERROR và lưu nguyên nhân lỗi.
+
+Không cần chạy sync_once khi worker đang chạy bình thường.
+
+
+6. QUY TẮC TÊN FILE
+
+Cấu trúc:
+
+[PHONGBAN]-[LOAI]-[STT]_[TEN-TAI-LIEU]_V[VERSION].[EXT]
+
+Ví dụ:
+
+HR-QT-001_Quy-trinh-nghi-phep_V1.pdf
+HR-QT-001_Quy-trinh-nghi-phep_V2.pdf
+IT-HD-002_Huong-dan-su-dung-POS_V1.docx
+
+Định dạng hỗ trợ:
+
+pdf, docx, xlsx, csv, txt, md
+
+Mã loại hỗ trợ:
+
+QT, QD, CS, HD, BM, BC, KH, TL
+
+
+7. VERSION HOẠT ĐỘNG NHƯ THẾ NÀO
+
+Khi V1 đang active và đưa V2 vào NEW:
+
+1. Hệ thống tạo V2 ở trạng thái inactive.
+2. Hệ thống xử lý và tạo embedding cho V2.
+3. Nếu thành công, V2 chuyển thành active.
+4. V1 chuyển thành inactive.
+5. RAG chỉ tìm kiếm trên V2.
+
+Nếu V2 lỗi, V1 vẫn active nên RAG không bị gián đoạn.
+
+
+8. CÁC FILE CHÍNH TRONG app/drive_sync
+
+worker.py
+  Chạy nền và xử lý job theo lịch.
+
+sync_once.py
+  Chạy toàn bộ quy trình một lần để test.
+
+pipeline_service.py
+  Điều phối scan -> version -> import -> move.
+
+google_client.py
+  Kết nối, tải, đọc và di chuyển file Google Drive.
+
+discovery_service.py
+  Quét file mới và kiểm tra thông tin ban đầu.
+
+version_service.py
+  Kiểm tra checksum và version.
+
+import_service.py
+  Đưa tài liệu vào RAG và kích hoạt version mới.
+
+move_service.py
+  Chuyển file sang DONE hoặc ERROR.
+
+repository.py
+  Đọc và ghi dữ liệu đồng bộ trong PostgreSQL.
+
+filename_parser.py
+  Phân tích quy tắc tên file.
+
+departments.py
+  Khai báo mã phòng ban được hỗ trợ.
+
+api.py
+  Cung cấp API cho trang quản trị Drive Sync.
+
+
+9. KIỂM TRA KẾT QUẢ
+
+Mở:
+
+http://127.0.0.1:8000/drive-sync
+
+Kiểm tra:
+
+- Worker hiện Online.
+- Các nguồn HR, IT... xuất hiện.
+- Job chuyển thành Completed.
+- File chuyển từ NEW sang DONE.
+- Kho tài liệu hiện đúng version và trạng thái.
+- RAG tìm được nội dung tài liệu mới.
+
+
+10. TÓM TẮT NGẮN NHẤT
+
+Lần đầu:
+
+1. Cài requirements.txt.
+2. Chạy app.init_db để tạo bảng.
+3. Chạy check_connection để kiểm tra Drive.
+4. Chạy app.main để mở API.
+5. Mở Terminal khác và chạy app.drive_sync.worker.
+
+Hằng ngày:
+
+- Giữ app.main chạy.
+- Giữ app.drive_sync.worker chạy.
+- Đưa tài liệu mới vào NEW.
+- Worker tự xử lý, không cần chạy thêm file nào.
+

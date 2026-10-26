@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Google Drive Sync · Đông Hải</title>
+    <link rel="stylesheet" href="/assets/admin.css" />
+    <link rel="stylesheet" href="/assets/drive-sync.css?v=20261024-1" />
+    <script src="/assets/drive-sync.js?v=20261024-1" defer></script>
+  </head>
+  <body>
+    <aside class="sidebar">
+      <a class="brand" href="/" aria-label="Đông Hải, trang chủ">
+        <span class="brand-mark">ĐH</span>
+        <span>ĐÔNG HẢI<small>TRUNG TÂM DỮ LIỆU</small></span>
+      </a>
+      <div class="nav-label">KHÔNG GIAN LÀM VIỆC</div>
+      <a class="nav-item" href="/"><span></span> Kho tài liệu</a>
+      <a class="nav-item" href="/taxonomy"><span></span> Loại và nhóm tài liệu</a>
+      <a class="nav-item" href="/products"><span></span> Sản phẩm</a>
+      <a class="nav-item selected" href="/drive-sync" aria-current="page">
+        <span></span> Google Drive Sync
+      </a>
+      <div class="sidebar-note drive-note">
+        <span class="note-symbol" aria-hidden="true">↻</span>
+        <strong>Auto RAG từ Google Drive</strong>
+        <p>Quét thư mục NEW, cập nhật Qdrant và chuyển file sang DONE hoặc ERROR.</p>
+      </div>
+      <div class="sidebar-footer">
+        <span class="mini-mark">ĐH</span> RAG Service
+        <span class="version">v1.0</span>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <span>Không gian quản trị <span class="slash">/</span> <strong>Google Drive Sync</strong></span>
+        <span class="connection" id="connection">Chưa kết nối</span>
+      </header>
+
+      <div class="workspace drive-workspace">
+        <div class="page-heading">
+          <div>
+            <div class="eyebrow">AUTO RAG · GOOGLE DRIVE</div>
+            <h1>Đồng bộ tài liệu tự động</h1>
+            <p>Theo dõi nguồn phòng ban, worker và toàn bộ lịch sử xử lý tài liệu.</p>
+          </div>
+          <div class="heading-actions">
+            <button class="secondary" id="refresh" type="button" disabled>↻ Làm mới</button>
+            <button class="secondary" id="disconnect" type="button" hidden>Ngắt kết nối</button>
+          </div>
+        </div>
+
+        <section class="login-card" id="login-panel" hidden>
+          <div class="login-icon">⌘</div>
+          <div class="login-content">
+            <h2>Kết nối Google Drive Sync</h2>
+            <p>Nhập ADMIN_API_KEY để xem và điều khiển tiến trình đồng bộ.</p>
+            <form id="login-form">
+              <div class="key-field">
+                <input id="admin-key" type="password" placeholder="Nhập ADMIN_API_KEY" required autocomplete="off" />
+                <button type="button" id="toggle-key" class="key-toggle">Hiện</button>
+              </div>
+              <button class="primary" type="submit">Kết nối</button>
+            </form>
+            <p class="field-error" id="login-error"></p>
+          </div>
+        </section>
+
+        <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+
+        <div id="dashboard" hidden>
+          <section class="drive-health" aria-label="Trạng thái hệ thống">
+            <div class="health-main">
+              <div class="worker-symbol" id="worker-symbol">↻</div>
+              <div>
+                <span class="section-kicker">DRIVE WORKER</span>
+                <h2 id="worker-title">Đang kiểm tra...</h2>
+                <p id="worker-detail">—</p>
+              </div>
+            </div>
+            <div class="health-metrics">
+              <div><span>Nguồn đã đăng ký</span><strong id="source-count">—</strong></div>
+              <div><span>Đang chờ / chạy</span><strong id="active-job-count">—</strong></div>
+              <div><span>Lần phản hồi cuối</span><strong id="heartbeat-at">—</strong></div>
+            </div>
+          </section>
+
+          <section class="drive-section">
+            <div class="section-heading">
+              <div>
+                <span class="section-kicker">NGUỒN ĐỒNG BỘ</span>
+                <h2>Thư mục phòng ban</h2>
+                <p>ID thư mục được quản lý qua <code>GOOGLE_DRIVE_DEPARTMENT_FOLDER_IDS</code>.</p>
+              </div>
+              <div class="global-schedule">
+                <label for="poll-minutes">CHU KỲ QUÉT CHUNG (PHÚT)</label>
+                <div>
+                  <input id="poll-minutes" type="number" min="1" max="1440" value="1" />
+                  <button class="secondary" id="save-schedule" type="button">Lưu chu kỳ</button>
+                </div>
+                <small>Áp dụng cho tất cả nguồn đang bật.</small>
+              </div>
+            </div>
+            <div class="source-grid" id="source-grid"></div>
+            <div class="empty-state" id="source-empty" hidden>
+              Chưa có nguồn nào. Hãy cấu hình folder ID trong <code>.env</code> và khởi động lại worker.
+            </div>
+          </section>
+
+          <section class="drive-section history-section">
+            <div class="section-heading history-heading">
+              <div>
+                <span class="section-kicker">NHẬT KÝ HOẠT ĐỘNG</span>
+                <h2>Lịch sử đồng bộ</h2>
+                <p>Chọn một job để xem file nào đã import, bỏ qua hoặc gặp lỗi.</p>
+              </div>
+              <div class="history-filters">
+                <select id="history-source" aria-label="Lọc theo phòng ban">
+                  <option value="">Tất cả phòng ban</option>
+                </select>
+                <select id="history-status" aria-label="Lọc theo trạng thái">
+                  <option value="">Tất cả trạng thái</option>
+                  <option value="completed">Hoàn tất</option>
+                  <option value="partial">Một phần</option>
+                  <option value="failed">Thất bại</option>
+                  <option value="running">Đang chạy</option>
+                  <option value="pending">Đang chờ</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="history-table-wrap">
+              <table class="drive-table">
+                <thead>
+                  <tr>
+                    <th>JOB</th><th>PHÒNG BAN</th><th>KÍCH HOẠT</th><th>TRẠNG THÁI</th>
+                    <th>KẾT QUẢ</th><th>THỜI GIAN</th><th></th>
+                  </tr>
+                </thead>
+                <tbody id="history-body"></tbody>
+              </table>
+              <div class="empty-state" id="history-empty" hidden>Chưa có lịch sử đồng bộ.</div>
+            </div>
+            <div class="drive-pagination">
+              <span id="history-page-info">—</span>
+              <div>
+                <button class="secondary page-button" id="history-prev" type="button">←</button>
+                <button class="secondary page-button" id="history-next" type="button">→</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+
+    <dialog class="drive-dialog" id="job-dialog">
+      <div class="dialog-head">
+        <div>
+          <span class="section-kicker">CHI TIẾT JOB</span>
+          <h2 id="dialog-title">Job</h2>
+          <p id="dialog-subtitle">—</p>
+        </div>
+        <button class="dialog-close" id="dialog-close" type="button" aria-label="Đóng">×</button>
+      </div>
+      <div class="dialog-summary" id="dialog-summary"></div>
+      <div class="dialog-files" id="dialog-files"></div>
+      <div class="empty-state" id="dialog-empty" hidden>Job này không ghi nhận file mới.</div>
+      <div class="dialog-footer">
+        <span id="dialog-page-info">—</span>
+        <div>
+          <button class="secondary page-button" id="dialog-prev" type="button">←</button>
+          <button class="secondary page-button" id="dialog-next" type="button">→</button>
+        </div>
+      </div>
+    </dialog>
+  </body>
+</html>

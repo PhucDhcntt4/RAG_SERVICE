@@ -21,12 +21,13 @@ DONGHAI–COMPANY DOCS
 ***Trong mỗi phòng ban, chuẩn hóa hai vùng tài liệu:
 02_HR – Nhân sự
 
-PUBLIC/
+Lớp Cha ( Tài liệu nội bộ )
+PUBLIC/Lớp con
 	so tay nhân viên.pdf			
 	Hướng dẫn chấm công.docx
 	Quy định nghỉ phép.pdf
 
-PRIVATE/
+PRIVATE/Lớp con 
 	Chính sách lương nội bộ.pdf
 	Kế hoạch nhân sự 2027.xlsx
 	Báo cáo chi phí nhân sự.xlsx

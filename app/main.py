@@ -40,6 +40,9 @@ from app.product_sync.api import create_product_sync_router
 from app.product_sync.repository import ProductSyncRepository
 from app.product_sync.inventory_api import create_inventory_sync_router
 from app.product_sync.inventory_repository import InventorySyncRepository
+from app.search_index_state_repository import SearchIndexStateRepository
+from app.drive_sync.api import create_drive_sync_router
+from app.drive_sync.repository import GoogleDriveSyncRepository
 
 logger = logging.getLogger("rag_service")
 bearer = HTTPBearer(auto_error=False)
@@ -108,9 +111,13 @@ class RequestGuard:
                 and product_detail_code not in reserved_product_paths
             )
         )
-        admin_only_path = request_path.startswith("/api/v1/documents") or (
-            request_path.startswith("/api/v1/products")
-            and not read_only_product_path
+        admin_only_path = (
+            request_path.startswith("/api/v1/documents")
+            or request_path.startswith("/api/v1/drive-sync")
+            or (
+                request_path.startswith("/api/v1/products")
+                and not read_only_product_path
+            )
         )
         if admin_only_path and role != "admin":
             return await JSONResponse(
@@ -155,6 +162,7 @@ def create_app(settings=None, service=None, chat=None, taxonomy=None):
         application.state.settings = config
         application.state.product_sync = None
         application.state.inventory_sync = None
+        application.state.drive_sync = None
         owned_embedder = None
         owned_chat = None
         owned_repository = None
@@ -165,6 +173,7 @@ def create_app(settings=None, service=None, chat=None, taxonomy=None):
             if config.database_url is not None:
                 owned_document_assets = DocumentAssetRepository(config)
                 owned_document_assets.initialize()
+                SearchIndexStateRepository(config).initialize()
             if chat is None:
                 owned_chat = GeminiChat(config)
             application.state.chat = chat if chat is not None else owned_chat
@@ -190,6 +199,10 @@ def create_app(settings=None, service=None, chat=None, taxonomy=None):
                 inventory_sync = InventorySyncRepository(config)
                 inventory_sync.initialize()
                 application.state.inventory_sync = inventory_sync
+
+                drive_sync = GoogleDriveSyncRepository(config)
+                drive_sync.initialize()
+                application.state.drive_sync = drive_sync
             if taxonomy is not None:
                 application.state.taxonomy = taxonomy
             elif config.database_url is not None:
@@ -266,6 +279,15 @@ def create_app(settings=None, service=None, chat=None, taxonomy=None):
             "Referrer-Policy": "no-referrer",
         })
 
+    @application.get("/drive-sync", include_in_schema=False)
+    @application.get("/admin/drive-sync", include_in_schema=False)
+    def drive_sync_dashboard():
+        return FileResponse(ROOT / "app" / "static" / "drive-sync.html", headers={
+            "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+        })
+
     @application.middleware("http")
     async def log_request(request, call_next):
         started = perf_counter()
@@ -289,6 +311,8 @@ def create_app(settings=None, service=None, chat=None, taxonomy=None):
             "/api/v1/products/sync/status",
             "/api/v1/products/sync/history",
             "/api/v1/products/inventory-sync/status",
+            "/api/v1/drive-sync/overview",
+            "/api/v1/drive-sync/jobs",
         }
 
         if route not in quiet_routes:
@@ -355,6 +379,7 @@ def create_app(settings=None, service=None, chat=None, taxonomy=None):
 
     application.include_router(create_product_sync_router(admin))
     application.include_router(create_inventory_sync_router(admin))
+    application.include_router(create_drive_sync_router(admin))
 
     def current_service(request: Request):
         return request.app.state.service
@@ -507,9 +532,14 @@ def create_app(settings=None, service=None, chat=None, taxonomy=None):
     def documents(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0),
                   doc_type_id: int | None = Query(None, ge=1),
                   group_id: int | None = Query(None, ge=1),
+                  is_active: bool | None = Query(None),
                   svc=Depends(current_service), catalog=Depends(current_taxonomy)):
         if doc_type_id is None and group_id is None:
-            rows = svc.repository.list_documents(limit, offset)
+            rows = svc.repository.list_documents(
+                limit,
+                offset,
+                active=is_active,
+            )
         else:
             category_codes = []
             if group_id is not None:
@@ -536,7 +566,21 @@ def create_app(settings=None, service=None, chat=None, taxonomy=None):
                 doc_type_id=doc_type_id,
                 group_id=group_id,
                 categories=category_codes,
+                active=is_active,
             )
+        drive_repo = getattr(application.state, "drive_sync", None)
+        if drive_repo is not None and rows:
+            drive_metadata = drive_repo.document_metadata_by_qdrant_ids(
+                row.get("id") for row in rows
+            )
+            for row in rows:
+                metadata = drive_metadata.get(str(row.get("id")))
+                if metadata is None:
+                    continue
+                row["document_code"] = metadata["document_code"]
+                row["document_version"] = metadata["document_version"]
+                row["drive_scope"] = metadata["drive_scope"]
+                row["is_active"] = metadata["is_active"]
         return {"documents": rows, "limit": limit, "offset": offset}
 
     @application.get("/api/v1/documents/by-source-key",
@@ -553,6 +597,16 @@ def create_app(settings=None, service=None, chat=None, taxonomy=None):
         row = svc.repository.get_document(document_id)
         if row is None:
             raise HTTPException(404, "Không tìm thấy tài liệu")
+        drive_repo = getattr(application.state, "drive_sync", None)
+        if drive_repo is not None:
+            metadata = drive_repo.document_metadata_by_qdrant_ids(
+                [document_id]
+            ).get(str(document_id))
+            if metadata is not None:
+                row["document_code"] = metadata["document_code"]
+                row["document_version"] = metadata["document_version"]
+                row["drive_scope"] = metadata["drive_scope"]
+                row["is_active"] = metadata["is_active"]
         return row
 
     @application.get("/api/v1/documents/{document_id}/download", dependencies=[Depends(admin)], tags=["Documents"])

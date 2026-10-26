@@ -12,3 +12,5 @@ log/
 storage/
 knowlegde/
 *.dump
+# Google service-account credentials
+API/*.json
