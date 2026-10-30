@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unicodedata
 from dataclasses import dataclass
 
@@ -10,42 +11,54 @@ class Department:
     name: str
 
 
-DEPARTMENTS = {
-    "BGD": Department(code="BGD", name="Ban Giám đốc"),
-    "HR": Department(code="HR", name="Nhân sự"),
-    "ACCOUNTING": Department(code="ACCOUNTING", name="Kế toán"),
-    "SALES": Department(code="SALES", name="Kinh doanh"),
-    "MARKETING": Department(code="MARKETING", name="Marketing"),
-    "CSKH": Department(code="CSKH", name="Chăm sóc khách hàng"),
-    "IT": Department(code="IT", name="Công nghệ thông tin"),
-}
-
-
 class DepartmentMappingError(ValueError):
     pass
 
 
+DEPARTMENT_CODE_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,49}$")
+DEPARTMENT_SEPARATOR_RE = re.compile(r"\s*[-–—]\s*", re.UNICODE)
+
+
 def normalize_department_code(value: str) -> str:
-    text = (value or "").strip().replace("Đ", "D").replace("đ", "d")
+    text = (value or "").strip()
+    text = text.replace("Đ", "D").replace("đ", "d")
     text = unicodedata.normalize("NFD", text)
     text = "".join(
         character
         for character in text
         if unicodedata.category(character) != "Mn"
     )
-    return text.upper()
+    text = text.upper()
+    text = re.sub(r"\s+", "_", text)
+    text = re.sub(r"[^A-Z0-9_]", "", text)
+    return text
 
 
 def resolve_department(folder_name: str) -> Department:
-    code = normalize_department_code(folder_name)
-    department = DEPARTMENTS.get(code)
-    if department is None:
-        allowed = ", ".join(DEPARTMENTS)
+    value = (folder_name or "").strip()
+    if not value:
         raise DepartmentMappingError(
-            f"Folder phòng ban '{folder_name}' không được hỗ trợ. "
-            f"Các mã hợp lệ: {allowed}"
+            "Tên folder phòng ban không được để trống"
         )
-    return department
+
+    # Hỗ trợ tên chỉ có mã (HR) hoặc mã kèm tên hiển thị
+    # (HR-Nhân sự, HR–Nhân sự, HR—Nhân sự).
+    parts = DEPARTMENT_SEPARATOR_RE.split(value, maxsplit=1)
+    raw_code = parts[0].strip()
+    code = normalize_department_code(raw_code)
+
+    if not DEPARTMENT_CODE_RE.fullmatch(code):
+        raise DepartmentMappingError(
+            f"Không thể tạo mã phòng ban hợp lệ từ folder '{folder_name}'. "
+            "Mã phải bắt đầu bằng chữ và chỉ chứa chữ, số hoặc dấu gạch dưới."
+        )
+
+    department_name = (
+        parts[1].strip()
+        if len(parts) > 1 and parts[1].strip()
+        else raw_code
+    )
+    return Department(code=code, name=department_name)
 
 
 def normalized_scope(scope: str) -> str:

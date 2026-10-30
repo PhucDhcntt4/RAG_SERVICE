@@ -36,6 +36,15 @@ from app.taxonomy_repository import (
     TaxonomyRepository,
 )
 from app.product_repository import ProductRepository
+from app.product_image_search.gemini_vision_client import GeminiVisionClient
+from app.product_image_search.image_embedder import ProductImageEmbedder
+from app.product_image_search.image_processing_service import ImageProcessingService
+from app.product_image_search.models import ProductImageSearchResponse
+from app.product_image_search.product_image_decision import ProductImageDecisionEngine
+from app.product_image_search.product_image_downloader import ProductImageDownloader
+from app.product_image_search.product_visual_verifier import ProductVisualVerifier
+from app.product_image_search.qdrant_image_client import QdrantImageClient
+from app.product_image_search.service import ProductImageSearchError, ProductImageService
 from app.product_sync.api import create_product_sync_router
 from app.product_sync.repository import ProductSyncRepository
 from app.product_sync.inventory_api import create_inventory_sync_router
@@ -96,19 +105,25 @@ class RequestGuard:
             "collections",
             "filters",
             "latest",
+            "image-search",
             "sync",
             "inventory-sync",
         }
-        read_only_product_path = request_method == "GET" and (
-            request_path in {
-                "/api/v1/products",
-                "/api/v1/products/filters",
-                "/api/v1/products/latest",
-            }
-            or (
-                bool(product_detail_code)
-                and "/" not in product_detail_code
-                and product_detail_code not in reserved_product_paths
+        read_only_product_path = (
+            request_method == "POST"
+            and request_path == "/api/v1/products/image-search"
+        ) or (
+            request_method == "GET" and (
+                request_path in {
+                    "/api/v1/products",
+                    "/api/v1/products/filters",
+                    "/api/v1/products/latest",
+                }
+                or (
+                    bool(product_detail_code)
+                    and "/" not in product_detail_code
+                    and product_detail_code not in reserved_product_paths
+                )
             )
         )
         admin_only_path = (
@@ -125,8 +140,11 @@ class RequestGuard:
                 status_code=403,
             )(scope, receive, send)
         # JSON may use escaped Unicode; allow bounded encoding overhead.
-        limit = max(settings.rag_max_upload_bytes + 65536,
-                    settings.rag_max_document_chars * 6 + 65536)
+        limit = max(
+            settings.rag_max_upload_bytes + 65536,
+            settings.product_image_max_bytes + 65536,
+            settings.rag_max_document_chars * 6 + 65536,
+        )
         body = bytearray()
         while True:
             message = await receive()
@@ -169,6 +187,10 @@ def create_app(settings=None, service=None, chat=None, taxonomy=None):
         owned_taxonomy = None
         owned_document_assets = None
         owned_products = None
+        owned_product_image_qdrant = None
+        owned_product_vision = None
+        owned_product_visual_verifier = None
+        owned_product_image_downloader = None
         try:
             if config.database_url is not None:
                 owned_document_assets = DocumentAssetRepository(config)
@@ -190,6 +212,59 @@ def create_app(settings=None, service=None, chat=None, taxonomy=None):
 
             owned_products = ProductRepository(config)
             application.state.products = owned_products
+
+            owned_product_image_qdrant = QdrantImageClient(
+                base_url=config.qdrant_url,
+                collection=config.product_image_collection,
+                api_key=(
+                    config.qdrant_api_key.get_secret_value()
+                    if config.qdrant_api_key
+                    else None
+                ),
+                timeout=config.qdrant_timeout_seconds,
+            )
+            if config.product_vision_enabled:
+                owned_product_vision = GeminiVisionClient(
+                    api_key=config.gemini_api_key.get_secret_value(),
+                    model=config.product_vision_model or config.rag_chat_model,
+                    timeout=config.product_vision_timeout_seconds,
+                )
+
+            decision_engine = None
+            if config.product_visual_verification_enabled:
+                owned_product_visual_verifier = ProductVisualVerifier(
+                    api_key=config.gemini_api_key.get_secret_value(),
+                    model=config.product_vision_model or config.rag_chat_model,
+                    timeout=config.product_vision_timeout_seconds,
+                )
+                owned_product_image_downloader = ProductImageDownloader(
+                    max_bytes=config.product_reference_image_max_bytes,
+                    timeout=config.product_reference_image_timeout_seconds,
+                )
+                decision_engine = ProductImageDecisionEngine(
+                    vector_weight=config.product_image_vector_weight,
+                    visual_weight=config.product_image_visual_weight,
+                    verify_min_score=config.product_image_verify_min_score,
+                    visual_min_score=config.product_image_visual_min_score,
+                    high_confidence=config.product_image_high_confidence,
+                    medium_confidence=config.product_image_medium_confidence,
+                )
+
+            application.state.product_image_service = ProductImageService(
+                config,
+                ProductImageEmbedder(
+                    model_name=config.product_clip_model,
+                    pretrained=config.product_clip_pretrained,
+                    device=config.product_clip_device,
+                ),
+                owned_product_image_qdrant,
+                owned_products,
+                vision_client=owned_product_vision,
+                image_processor=ImageProcessingService(),
+                visual_verifier=owned_product_visual_verifier,
+                image_downloader=owned_product_image_downloader,
+                decision_engine=decision_engine,
+            )
 
             if config.database_url is not None:
                 product_sync = ProductSyncRepository(config)
@@ -247,6 +322,14 @@ def create_app(settings=None, service=None, chat=None, taxonomy=None):
                 owned_repository.close()
             if owned_products is not None:
                 owned_products.close()
+            if owned_product_vision is not None:
+                await owned_product_vision.close()
+            if owned_product_visual_verifier is not None:
+                await owned_product_visual_verifier.close()
+            if owned_product_image_downloader is not None:
+                await owned_product_image_downloader.close()
+            if owned_product_image_qdrant is not None:
+                await owned_product_image_qdrant.close()
 
     application = FastAPI(title="Đông Hải RAG Service", version="1.0.0", lifespan=lifespan)
     application.add_middleware(RequestGuard, owner=application)
@@ -386,6 +469,9 @@ def create_app(settings=None, service=None, chat=None, taxonomy=None):
 
     def current_products(request: Request):
         return request.app.state.products
+
+    def current_product_image_service(request: Request):
+        return request.app.state.product_image_service
 
     def current_taxonomy(request: Request):
         value = request.app.state.taxonomy
@@ -815,6 +901,31 @@ def create_app(settings=None, service=None, chat=None, taxonomy=None):
         )
 
 
+    @application.post(
+        "/api/v1/products/image-search",
+        response_model=ProductImageSearchResponse,
+        dependencies=[Depends(authorize)],
+        tags=["Products"],
+    )
+    async def product_image_search(
+        file: UploadFile = File(...),
+        image_service=Depends(current_product_image_service),
+    ):
+        try:
+            data = await file.read(
+                image_service.settings.product_image_max_bytes + 1
+            )
+            return await image_service.search(
+                filename=file.filename or "image",
+                media_type=file.content_type or "",
+                data=data,
+            )
+        except ProductImageSearchError as exc:
+            raise HTTPException(exc.status_code, str(exc)) from exc
+        finally:
+            await file.close()
+
+
     @application.get(
         "/api/v1/products/{product_code}",
         dependencies=[Depends(authorize)],
@@ -839,3 +950,4 @@ def create_app(settings=None, service=None, chat=None, taxonomy=None):
 
 
 app = create_app()
+

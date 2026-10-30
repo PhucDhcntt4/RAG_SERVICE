@@ -59,6 +59,42 @@ class Settings(BaseModel):
         default="bot_product_images_clip_v2",
         pattern=r"^[A-Za-z0-9._-]{1,255}$",
     )
+    product_image_search_enabled: bool = False
+    product_clip_model: str = "ViT-B-32"
+    product_clip_pretrained: str = "laion2b_s34b_b79k"
+    product_clip_device: str = "auto"
+    product_image_max_bytes: int = Field(
+        default=8 * 1024 * 1024,
+        ge=1024,
+        le=20 * 1024 * 1024,
+    )
+    product_image_result_limit: int = Field(default=8, ge=1, le=20)
+    product_image_candidate_limit: int = Field(default=50, ge=1, le=200)
+    product_image_min_score: float = Field(default=0.25, ge=0, le=1)
+    product_vision_enabled: bool = False
+    product_vision_model: str | None = None
+    product_vision_timeout_seconds: float = Field(default=45, gt=0, le=180)
+    product_vision_verify_top_k: int = Field(default=5, ge=1, le=20)
+    product_vision_original_candidate_slots: int = Field(default=2, ge=1, le=10)
+    product_visual_verification_enabled: bool = False
+    product_reference_image_timeout_seconds: float = Field(
+        default=15,
+        gt=0,
+        le=60,
+    )
+    product_reference_image_max_bytes: int = Field(
+        default=6 * 1024 * 1024,
+        ge=1024,
+        le=20 * 1024 * 1024,
+    )
+    product_image_fast_accept_score: float = Field(default=0.88, ge=0, le=1)
+    product_image_fast_accept_margin: float = Field(default=0.08, ge=0, le=1)
+    product_image_vector_weight: float = Field(default=0.55, ge=0, le=1)
+    product_image_visual_weight: float = Field(default=0.45, ge=0, le=1)
+    product_image_verify_min_score: float = Field(default=0.65, ge=0, le=1)
+    product_image_visual_min_score: float = Field(default=0.50, ge=0, le=1)
+    product_image_high_confidence: float = Field(default=0.82, ge=0, le=1)
+    product_image_medium_confidence: float = Field(default=0.65, ge=0, le=1)
 
     google_drive_credentials_file: str = "API/service.json"
     google_drive_sync_enabled: bool = False
@@ -115,3 +151,4 @@ class Settings(BaseModel):
             for item in self.google_drive_department_folder_ids.split(",")
         )
         return tuple(dict.fromkeys(item for item in values if item))
+

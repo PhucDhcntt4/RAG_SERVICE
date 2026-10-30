@@ -40,6 +40,10 @@ services:
         bind:
           create_host_path: false
       - type: bind
+        source: ./API
+        target: /app/API
+        read_only: true
+      - type: bind
         source: ./knowlegde
         target: /app/knowlegde
       - type: bind
@@ -76,6 +80,53 @@ services:
         read_only: true
         bind:
           create_host_path: false
+      - type: bind
+        source: ./API
+        target: /app/API
+        read_only: true
+      - type: bind
+        source: ./storage
+        target: /app/storage
+    healthcheck:
+      disable: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  drive-worker:
+    build: .
+    image: donghai-rag-service:local
+    restart: unless-stopped
+    init: true
+    command: ["python", "-m", "app.drive_sync.worker"]
+    environment:
+      QDRANT_URL: http://host.docker.internal:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-rag_service}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-rag_service}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - type: bind
+        source: ./.env
+        target: /app/.env
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./API
+        target: /app/API
+        read_only: true
+      - type: bind
+        source: ./knowlegde
+        target: /app/knowlegde
       - type: bind
         source: ./storage
         target: /app/storage

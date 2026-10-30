@@ -1,0 +1,69 @@
+{
+  "shoe": [
+    "GIAY BOOT (MGO)",
+    "GIAY BOOT (WGO)",
+    "GIAY BUP BE (WGU)",
+    "GIAY CAO GOT (WGC)",
+    "GIAY DE XUONG (WGX)",
+    "GIAY HYBRID (MHB)",
+    "GIAY MOI (MGM)",
+    "GIAY MOI (WGM)",
+    "GIAY RO (MGR)",
+    "GIAY TANG CHIEU CAO (MGC)",
+    "GIAY TAY (MGT)",
+    "GIAY THE THAO (KTT)",
+    "GIAY THE THAO (MTT)",
+    "GIAY THE THAO (WTT)",
+    "GIÀY CASUAL (MCA)",
+    "GIÀY CASUAL (WCA)",
+    "GIÀY SNEAKER (MSN)",
+    "GIÀY SNEAKER (WSN)",
+    "SAPO (MSP)",
+    "SAPO (WSP)"
+  ],
+  "sandal": [
+    "SANDAL (MSD)",
+    "SANDAL CAO GOT (WSC)",
+    "SANDAL DE BANG (WSD)",
+    "SANDAL DE XUONG (WSX)",
+    "SANDAL KEP (WSK)"
+  ],
+  "slipper": [
+    "DEP CAO GOT (WDC)",
+    "DEP DE XUONG (WDX)",
+    "DEP KEP (MDK)",
+    "DEP KEP (WDK)",
+    "DEP QUAI (MDQ)",
+    "DEP QUAI NGANG (WDQ)"
+  ],
+  "bag": [
+    "BALO NAM (BLO)",
+    "BALO NU (BLO)",
+    "CAP NAM (CAP)",
+    "TUI CHEO NAM (TDV)",
+    "TUI DEO VAI (TDV)",
+    "TUI XACH LON (TXL)",
+    "TUI XACH NHO (TXN)",
+    "TUI XACH TRUNG (TXT)"
+  ],
+  "wallet": [
+    "VI CAM TAY (VCT)",
+    "VI CAM TAY NAM (VIC)",
+    "VI DI TIEC (VDT)",
+    "VI DUNG NAM (VID)",
+    "VI NGANG NAM (VIN)"
+  ],
+  "belt": [
+    "NIT KIM NAM (NKM)",
+    "NIT NU (NKM)",
+    "NIT TANG DO NAM (NTD)"
+  ],
+  "accessory": [
+    "GIFT",
+    "Phiếu Quà Tặng",
+    "VO"
+  ],
+  "unknown": []
+}
+
+

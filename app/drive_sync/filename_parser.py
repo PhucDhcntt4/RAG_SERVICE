@@ -24,7 +24,7 @@ DOCUMENT_KINDS = {
 SUPPORTED_EXTENSIONS = {"pdf", "docx", "xlsx", "csv", "txt", "md"}
 
 FILENAME_RE = re.compile(
-    r"^(?P<department>[A-ZĐ]+)-"
+    r"^(?P<department>[A-ZĐ][A-ZĐ0-9_]*)-"
     r"(?P<kind>[A-Z]{2,10})-"
     r"(?P<sequence>[0-9]{3})_"
     r"(?P<slug>[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)_"
